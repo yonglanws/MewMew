@@ -542,14 +542,16 @@ class StickerGroupPage extends StatelessWidget {
                             final count = state
                                 .stickersForFolder(folder.id)
                                 .length;
+                            final thumbnailPath = state
+                                .stickersForFolder(folder.id)
+                                .map((sticker) => sticker.filePath.trim())
+                                .where((path) => path.isNotEmpty)
+                                .firstOrNull;
                             return _StickerEntry(
                               icon: Icons.folder_outlined,
                               iconColor: Theme.of(context).colorScheme.tertiary,
                               leading: _StickerThumbnailBox(
-                                filePath: state
-                                    .stickersForFolder(folder.id)
-                                    .firstOrNull
-                                    ?.filePath,
+                                filePath: thumbnailPath,
                                 fallbackIcon: Icons.folder_outlined,
                               ),
                               title: folder.name,
