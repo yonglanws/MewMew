@@ -63,15 +63,14 @@ void main() {
     expect(find.text('新的组名'), findsOneWidget);
   });
 
-  testWidgets('人格绑定使用右下角 FAB', (tester) async {
+  testWidgets('人格绑定通过人格列表进入，不显示独立绑定 FAB', (tester) async {
     final state = AppState(StorageService());
     addTearDown(state.dispose);
 
     await tester.pumpWidget(_host(state, const PersonaStickerBindingPage()));
 
-    expect(find.text('绑定人格'), findsOneWidget);
-    expect(find.byType(FloatingActionButton), findsOneWidget);
-    expect(find.byTooltip('绑定人格'), findsNothing);
+    expect(find.text('绑定人格'), findsNothing);
+    expect(find.byType(FloatingActionButton), findsNothing);
   });
 
   testWidgets('文件夹使用子表情包图片作为缩略图', (tester) async {

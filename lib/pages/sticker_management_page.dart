@@ -9,6 +9,7 @@ import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/fast_route.dart';
 import '../utils/large_app_bar_title.dart';
+import '../widgets/persona_avatar.dart';
 
 class StickerManagementPage extends StatelessWidget {
   const StickerManagementPage({super.key});
@@ -413,18 +414,26 @@ class StickerGroupListPage extends StatelessWidget {
                 Card(
                   child: Column(
                     children: [
-                      for (
-                        var index = 0;
-                        index < state.stickerGroups.length;
-                        index++
-                      ) ...[
-                        if (index > 0) const Divider(height: 1, indent: 72),
+                      for (final group in state.stickerGroups)
                         Builder(
                           builder: (context) {
-                            final group = state.stickerGroups[index];
+                            final thumbnailPath = state
+                                .stickerFoldersForGroup(group.id)
+                                .expand(
+                                  (folder) =>
+                                      state.stickersForFolder(folder.id),
+                                )
+                                .map((sticker) => sticker.filePath.trim())
+                                .where((path) => path.isNotEmpty)
+                                .firstOrNull;
                             return _StickerEntry(
                               icon: Icons.collections_bookmark_outlined,
                               iconColor: Theme.of(context).colorScheme.primary,
+                              leading: _StickerThumbnailBox(
+                                filePath: thumbnailPath,
+                                fallbackIcon:
+                                    Icons.collections_bookmark_outlined,
+                              ),
                               title: group.name,
                               subtitle: const Text('表情包组'),
                               onTap: () => Navigator.push(
@@ -437,7 +446,6 @@ class StickerGroupListPage extends StatelessWidget {
                             );
                           },
                         ),
-                      ],
                     ],
                   ),
                 ),
@@ -520,11 +528,9 @@ class StickerGroupPage extends StatelessWidget {
                 Card(
                   child: Column(
                     children: [
-                      for (var index = 0; index < folders.length; index++) ...[
-                        if (index > 0) const Divider(height: 1, indent: 72),
+                      for (final folder in folders)
                         Builder(
                           builder: (context) {
-                            final folder = folders[index];
                             final count = state
                                 .stickersForFolder(folder.id)
                                 .length;
@@ -570,7 +576,6 @@ class StickerGroupPage extends StatelessWidget {
                             );
                           },
                         ),
-                      ],
                     ],
                   ),
                 ),
@@ -599,14 +604,6 @@ class StickerGroupPage extends StatelessWidget {
               onTap: () {
                 Navigator.pop(sheetContext);
                 _editGroup(context, group);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.people_outline),
-              title: const Text('绑定人格'),
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _showBindings(context, group);
               },
             ),
             ListTile(
@@ -658,58 +655,6 @@ class StickerGroupPage extends StatelessWidget {
         description: draft.description,
       );
     }
-  }
-
-  static void _showBindings(BuildContext context, StickerGroup group) {
-    final state = context.read<AppState>();
-    final selected = state.personaStickerBindings
-        .where((binding) => binding.groupId == group.id)
-        .map((binding) => binding.personaId)
-        .toSet();
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setState) => AlertDialog(
-          title: const Text('绑定人格'),
-          content: SizedBox(
-            width: 360,
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                for (final persona in state.personas)
-                  CheckboxListTile(
-                    value: selected.contains(persona.id),
-                    title: Text(persona.name),
-                    onChanged: (value) => setState(() {
-                      if (value == true) {
-                        selected.add(persona.id);
-                      } else {
-                        selected.remove(persona.id);
-                      }
-                    }),
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                await state.setStickerGroupPersonas(
-                  groupId: group.id,
-                  personaIds: selected,
-                );
-                if (dialogContext.mounted) Navigator.pop(dialogContext);
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
@@ -841,11 +786,6 @@ class PersonaStickerBindingPage extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('人格绑定')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _pickPersona(context),
-        icon: const Icon(Icons.link_rounded),
-        label: const Text('绑定人格'),
-      ),
       body: Column(
         children: [
           _InfoCard(
@@ -860,15 +800,9 @@ class PersonaStickerBindingPage extends StatelessWidget {
                 Card(
                   child: Column(
                     children: [
-                      for (
-                        var index = 0;
-                        index < state.personas.length;
-                        index++
-                      ) ...[
-                        if (index > 0) const Divider(height: 1, indent: 72),
+                      for (final persona in state.personas)
                         Builder(
                           builder: (context) {
-                            final persona = state.personas[index];
                             final groupIds = state.personaStickerBindings
                                 .where(
                                   (binding) => binding.personaId == persona.id,
@@ -907,13 +841,16 @@ class PersonaStickerBindingPage extends StatelessWidget {
                             return _StickerEntry(
                               icon: Icons.person_outline,
                               iconColor: cs.tertiary,
+                              leading: PersonaAvatar(
+                                persona: persona,
+                                radius: 20,
+                              ),
                               title: persona.name,
                               subtitle: subtitle,
                               onTap: () => _showGroups(context, persona.id),
                             );
                           },
                         ),
-                      ],
                     ],
                   ),
                 ),
@@ -923,42 +860,6 @@ class PersonaStickerBindingPage extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  static Future<void> _pickPersona(BuildContext context) async {
-    final state = context.read<AppState>();
-    final personaId = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: state.personas.isEmpty
-            ? const Padding(
-                padding: EdgeInsets.all(32),
-                child: Center(child: Text('还没有可绑定的人格')),
-              )
-            : ListView(
-                shrinkWrap: true,
-                children: [
-                  const ListTile(
-                    title: Text(
-                      '选择人格',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  for (final persona in state.personas)
-                    ListTile(
-                      leading: const Icon(Icons.person_outline),
-                      title: Text(persona.name),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.pop(sheetContext, persona.id),
-                    ),
-                ],
-              ),
-      ),
-    );
-    if (personaId != null && context.mounted) {
-      _showGroups(context, personaId);
-    }
   }
 
   static void _showGroups(BuildContext context, String personaId) {

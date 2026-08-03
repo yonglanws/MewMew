@@ -54,8 +54,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('编辑组名'), findsOneWidget);
-    expect(find.text('绑定人格'), findsOneWidget);
     expect(find.text('新建文件夹'), findsOneWidget);
+    expect(find.text('绑定人格'), findsNothing);
   });
 
   testWidgets('表情包文件夹把导入移到右下角 FAB', (tester) async {
