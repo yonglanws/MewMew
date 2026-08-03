@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import '../utils/large_app_bar_title.dart';
-import '../widgets/settings_switch_action.dart';
 
 /// 消息防抖动设置独立页面
 class MessageDebounceSettingsPage extends StatelessWidget {
@@ -15,11 +14,6 @@ class MessageDebounceSettingsPage extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      floatingActionButton: SettingsSwitchFab(
-        icon: Icons.tune_rounded,
-        label: '防抖开关',
-        onPressed: () => _showSwitches(context),
-      ),
       body: CustomScrollView(
         slivers: [
           SliverAppBar.large(
@@ -35,6 +29,33 @@ class MessageDebounceSettingsPage extends StatelessWidget {
               child: Card(
                 child: Column(
                   children: [
+                    SwitchListTile(
+                      secondary: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: cs.secondary.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.merge_type_outlined,
+                          color: cs.secondary,
+                          size: 22,
+                        ),
+                      ),
+                      title: const Text(
+                        '消息防抖动',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      subtitle: Text(
+                        state.messageMergeEnabled
+                            ? '已开启：${state.messageMergeDebounce}s 内连续发出的多条消息合并为一条发送'
+                            : '已关闭：每条发送的消息立即独立触发 AI 回复',
+                      ),
+                      value: state.messageMergeEnabled,
+                      onChanged: (v) =>
+                          context.read<AppState>().setMessageMergeEnabled(v),
+                    ),
                     ListTile(
                       enabled: state.messageMergeEnabled,
                       contentPadding: const EdgeInsets.symmetric(
@@ -87,77 +108,40 @@ class MessageDebounceSettingsPage extends StatelessWidget {
                                   .setMessageMergeDebounce(v),
                             ),
                     ),
+                    SwitchListTile(
+                      secondary: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: cs.tertiary.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.keyboard_outlined,
+                          color: cs.tertiary,
+                          size: 22,
+                        ),
+                      ),
+                      title: const Text(
+                        '打字防抖',
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                      subtitle: Text(
+                        state.typingDebounceEnabled
+                            ? '已开启：输入框非空打字时暂停倒计时，停止打字或切出页面后恢复发送'
+                            : '已关闭：消息发出后直接开始防抖倒计时',
+                      ),
+                      value: state.typingDebounceEnabled,
+                      onChanged: (v) =>
+                          context.read<AppState>().setTypingDebounceEnabled(v),
+                    ),
                   ],
                 ),
               ),
             ),
           ),
-          const SliverToBoxAdapter(child: SizedBox(height: 104)),
         ],
       ),
-    );
-  }
-
-  static void _showSwitches(BuildContext context) {
-    showSettingsSwitchSheet(
-      context,
-      title: '防抖开关',
-      builder: (sheetContext) {
-        final state = sheetContext.watch<AppState>();
-        final cs = Theme.of(sheetContext).colorScheme;
-        return Column(
-          children: [
-            SwitchListTile(
-              secondary: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: cs.secondary.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  Icons.merge_type_outlined,
-                  color: cs.secondary,
-                  size: 22,
-                ),
-              ),
-              title: const Text('消息防抖动'),
-              subtitle: Text(
-                state.messageMergeEnabled
-                    ? '已开启：${state.messageMergeDebounce}s 内连续发出的多条消息合并为一条发送'
-                    : '已关闭：每条发送的消息立即独立触发 AI 回复',
-              ),
-              value: state.messageMergeEnabled,
-              onChanged: (v) =>
-                  context.read<AppState>().setMessageMergeEnabled(v),
-            ),
-            SwitchListTile(
-              secondary: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: cs.tertiary.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  Icons.keyboard_outlined,
-                  color: cs.tertiary,
-                  size: 22,
-                ),
-              ),
-              title: const Text('打字防抖'),
-              subtitle: Text(
-                state.typingDebounceEnabled
-                    ? '已开启：输入框非空打字时暂停倒计时，停止打字或切出页面后恢复发送'
-                    : '已关闭：消息发出后直接开始防抖倒计时',
-              ),
-              value: state.typingDebounceEnabled,
-              onChanged: (v) =>
-                  context.read<AppState>().setTypingDebounceEnabled(v),
-            ),
-          ],
-        );
-      },
     );
   }
 

@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../utils/fast_route.dart';
 import '../utils/large_app_bar_title.dart';
-import '../widgets/settings_switch_action.dart';
 import 'api_config_page.dart';
 import 'memory_settings_page.dart';
 import 'message_debounce_settings_page.dart';
@@ -23,15 +22,6 @@ class SettingsPage extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      floatingActionButton: SettingsSwitchFab(
-        icon: state.streamOutputEnabled
-            ? Icons.toggle_on_outlined
-            : Icons.toggle_off_outlined,
-        label: state.streamOutputEnabled ? '关闭流式输出' : '开启流式输出',
-        onPressed: () => context.read<AppState>().setStreamOutputEnabled(
-          !state.streamOutputEnabled,
-        ),
-      ),
       body: CustomScrollView(
         slivers: [
           SliverAppBar.large(
@@ -122,7 +112,11 @@ class SettingsPage extends StatelessWidget {
                   iconColor: cs.primary,
                   title: '流式输出',
                   subtitle: '控制 AI 回复的实时显示方式',
-                  isEnabled: true,
+                  trailing: Switch(
+                    value: state.streamOutputEnabled,
+                    onChanged: (v) =>
+                        context.read<AppState>().setStreamOutputEnabled(v),
+                  ),
                 ),
                 _SettingTile(
                   icon: Icons.splitscreen_outlined,
@@ -185,7 +179,7 @@ class SettingsPage extends StatelessWidget {
               ],
             ),
           ),
-          const SliverPadding(padding: EdgeInsets.only(bottom: 104)),
+          const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
         ],
       ),
     );
@@ -268,7 +262,6 @@ class _SettingTile extends StatelessWidget {
   final String subtitle;
   final Widget? trailing;
   final VoidCallback? onTap;
-  final bool? isEnabled;
 
   const _SettingTile({
     required this.icon,
@@ -277,12 +270,11 @@ class _SettingTile extends StatelessWidget {
     required this.subtitle,
     this.trailing,
     this.onTap,
-    this.isEnabled,
   });
 
   @override
   Widget build(BuildContext context) {
-    final visuallyDisabled = isEnabled ?? (onTap == null && trailing == null);
+    final visuallyDisabled = onTap == null && trailing == null;
     final cs = Theme.of(context).colorScheme;
     return ListTile(
       enabled: onTap != null || trailing != null,

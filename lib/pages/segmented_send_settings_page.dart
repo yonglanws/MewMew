@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../state/app_state.dart';
-import '../widgets/settings_switch_action.dart';
 
 /// 对话分段发送设置独立页面
 ///
@@ -21,11 +20,6 @@ class SegmentedSendSettingsPage extends StatelessWidget {
     final streamEnabled = state.streamOutputEnabled;
 
     return Scaffold(
-      floatingActionButton: SettingsSwitchFab(
-        icon: Icons.tune_rounded,
-        label: '分段开关',
-        onPressed: () => _showSwitches(context),
-      ),
       body: CustomScrollView(
         slivers: [
           SliverAppBar.large(
@@ -81,7 +75,12 @@ class SegmentedSendSettingsPage extends StatelessWidget {
                   iconColor: cs.primary,
                   title: '启用分段发送',
                   subtitle: e ? '已开启：流式结束后将长回复按标点智能拆为多段' : '已关闭：AI 整段回复作为一条消息',
-                  onTap: () => _showSwitches(context),
+                  trailing: Switch(
+                    value: e,
+                    onChanged: streamEnabled
+                        ? null
+                        : (v) => _update(context, s.copyWith(enabled: v)),
+                  ),
                 ),
                 _SettingTile(
                   icon: Icons.short_text,
@@ -228,9 +227,13 @@ class SegmentedSendSettingsPage extends StatelessWidget {
                   subtitle: s.trimBlankLines
                       ? '已开启：仅清理每段两端空行，不影响段内换行'
                       : '已关闭：保留每段两端空行',
-                  onTap: !e || streamEnabled
-                      ? null
-                      : () => _showSwitches(context),
+                  trailing: Switch(
+                    value: s.trimBlankLines,
+                    onChanged: !e || streamEnabled
+                        ? null
+                        : (v) =>
+                              _update(context, s.copyWith(trimBlankLines: v)),
+                  ),
                   disabled: !e || streamEnabled,
                 ),
               ],
@@ -369,15 +372,19 @@ class SegmentedSendSettingsPage extends StatelessWidget {
                   subtitle: s.reverseReplace
                       ? '替换规则同时反向作用于用户输入。'
                       : '替换规则仅作用于 AI 回复',
-                  onTap: !e || streamEnabled
-                      ? null
-                      : () => _showSwitches(context),
+                  trailing: Switch(
+                    value: s.reverseReplace,
+                    onChanged: !e || streamEnabled
+                        ? null
+                        : (v) =>
+                              _update(context, s.copyWith(reverseReplace: v)),
+                  ),
                   disabled: !e || streamEnabled,
                 ),
               ],
             ),
           ),
-          const SliverToBoxAdapter(child: SizedBox(height: 104)),
+          const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
     );
@@ -385,65 +392,6 @@ class SegmentedSendSettingsPage extends StatelessWidget {
 
   static void _update(BuildContext context, SegmentedSendSettings next) {
     context.read<AppState>().setSegmentedSendSettings(next);
-  }
-
-  static void _showSwitches(BuildContext context) {
-    showSettingsSwitchSheet(
-      context,
-      title: '分段开关',
-      builder: (sheetContext) {
-        final state = sheetContext.watch<AppState>();
-        final settings = state.segmentedSendSettings;
-        final streamEnabled = state.streamOutputEnabled;
-        return Column(
-          children: [
-            SwitchListTile(
-              secondary: const Icon(Icons.splitscreen_outlined),
-              title: const Text('启用分段发送'),
-              subtitle: Text(
-                settings.enabled
-                    ? '已开启：流式结束后将长回复按标点智能拆为多段'
-                    : '已关闭：AI 整段回复作为一条消息',
-              ),
-              value: settings.enabled,
-              onChanged: streamEnabled
-                  ? null
-                  : (v) => _update(sheetContext, settings.copyWith(enabled: v)),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.cleaning_services_outlined),
-              title: const Text('清理首尾空行'),
-              subtitle: Text(
-                settings.trimBlankLines
-                    ? '已开启：仅清理每段两端空行，不影响段内换行'
-                    : '已关闭：保留每段两端空行',
-              ),
-              value: settings.trimBlankLines,
-              onChanged: !settings.enabled || streamEnabled
-                  ? null
-                  : (v) => _update(
-                      sheetContext,
-                      settings.copyWith(trimBlankLines: v),
-                    ),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.sync_alt),
-              title: const Text('反向替换'),
-              subtitle: Text(
-                settings.reverseReplace ? '替换规则同时反向作用于用户输入。' : '替换规则仅作用于 AI 回复',
-              ),
-              value: settings.reverseReplace,
-              onChanged: !settings.enabled || streamEnabled
-                  ? null
-                  : (v) => _update(
-                      sheetContext,
-                      settings.copyWith(reverseReplace: v),
-                    ),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   // ---------- 对话框 ----------
