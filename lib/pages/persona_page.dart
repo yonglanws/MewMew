@@ -21,18 +21,14 @@ class PersonaPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('人格设定'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add_rounded),
-            tooltip: '创建角色',
-            onPressed: () => _openEditor(context),
-          ),
-        ],
+      appBar: AppBar(title: const Text('人格设定')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openEditor(context),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('创建角色'),
       ),
       body: state.personas.isEmpty
-          ? _EmptyState(onCreate: () => _openEditor(context))
+          ? const _EmptyState()
           : ListView.separated(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
               cacheExtent: 500,
@@ -91,8 +87,7 @@ class PersonaPage extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  final VoidCallback onCreate;
-  const _EmptyState({required this.onCreate});
+  const _EmptyState();
 
   @override
   Widget build(BuildContext context) {
@@ -128,12 +123,6 @@ class _EmptyState extends StatelessWidget {
               '创建一个角色，设定性格与风格\n即可开始专属对话',
               textAlign: TextAlign.center,
               style: TextStyle(color: cs.outline, height: 1.5),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: onCreate,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('创建角色'),
             ),
           ],
         ),
@@ -413,17 +402,16 @@ class _PersonaEditorPageState extends State<PersonaEditorPage> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.persona == null ? '创建角色' : '编辑角色'),
-        actions: [
-          FilledButton(onPressed: _save, child: const Text('保存')),
-          const SizedBox(width: 16),
-        ],
+      appBar: AppBar(title: Text(widget.persona == null ? '创建角色' : '编辑角色')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _save,
+        icon: const Icon(Icons.save_outlined),
+        label: const Text('保存'),
       ),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 104),
           children: [
             // —— 头像区 ——
             _SectionCard(

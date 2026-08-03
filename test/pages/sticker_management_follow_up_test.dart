@@ -51,7 +51,9 @@ void main() {
     addTearDown(state.dispose);
 
     await tester.pumpWidget(_host(state, StickerGroupPage(group: group)));
-    await tester.tap(find.byTooltip('编辑组名'));
+    await tester.tap(find.text('管理表情包组'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('编辑组名'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '新的组名');
     await tester.tap(find.text('保存'));

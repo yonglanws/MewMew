@@ -506,30 +506,16 @@ class StickerGroupPage extends StatelessWidget {
         group;
     final folders = state.stickerFoldersForGroup(currentGroup.id);
     return Scaffold(
-      appBar: AppBar(
-        title: Text(currentGroup.name),
-        actions: [
-          IconButton(
-            tooltip: '编辑组名',
-            icon: const Icon(Icons.edit_outlined),
-            onPressed: () => _editGroup(context, currentGroup),
-          ),
-          IconButton(
-            tooltip: '绑定人格',
-            icon: const Icon(Icons.people_outline),
-            onPressed: () => _showBindings(context, currentGroup),
-          ),
-          IconButton(
-            tooltip: '新建文件夹',
-            icon: const Icon(Icons.create_new_folder_outlined),
-            onPressed: () => _createFolder(context, currentGroup),
-          ),
-        ],
+      appBar: AppBar(title: Text(currentGroup.name)),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _showActions(context, currentGroup),
+        icon: const Icon(Icons.tune_rounded),
+        label: const Text('管理表情包组'),
       ),
       body: folders.isEmpty
-          ? _EmptyFolders(onCreate: () => _createFolder(context, currentGroup))
+          ? const _EmptyFolders()
           : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 104),
               children: [
                 Card(
                   child: Column(
@@ -590,6 +576,51 @@ class StickerGroupPage extends StatelessWidget {
                 ),
               ],
             ),
+    );
+  }
+
+  static void _showActions(BuildContext context, StickerGroup group) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text(
+                '表情包组操作',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('编辑组名'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _editGroup(context, group);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.people_outline),
+              title: const Text('绑定人格'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showBindings(context, group);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.create_new_folder_outlined),
+              title: const Text('新建文件夹'),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _createFolder(context, group);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
     );
   }
 
@@ -984,16 +1015,15 @@ class PersonaStickerBindingPage extends StatelessWidget {
 }
 
 class _EmptyFolders extends StatelessWidget {
-  final VoidCallback onCreate;
-  const _EmptyFolders({required this.onCreate});
+  const _EmptyFolders();
 
   @override
   Widget build(BuildContext context) => _StickerEmptyState(
     icon: Icons.folder_outlined,
     title: '这个表情包组还没有文件夹',
     description: '创建情绪文件夹，为表情包补充清晰的使用场景。',
-    actionLabel: '新建文件夹',
-    onAction: onCreate,
+    actionLabel: null,
+    onAction: null,
   );
 }
 
@@ -1007,20 +1037,16 @@ class StickerFolderPage extends StatelessWidget {
     final stickers = state.stickersForFolder(folder.id);
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(
-        title: Text(folder.name),
-        actions: [
-          IconButton(
-            tooltip: '导入表情包',
-            icon: const Icon(Icons.add_photo_alternate_outlined),
-            onPressed: () => _importSticker(context),
-          ),
-        ],
+      appBar: AppBar(title: Text(folder.name)),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _importSticker(context),
+        icon: const Icon(Icons.add_photo_alternate_outlined),
+        label: const Text('导入表情包'),
       ),
       body: stickers.isEmpty
-          ? _EmptyStickers(onImport: () => _importSticker(context))
+          ? const _EmptyStickers()
           : GridView.builder(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 104),
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 150,
                 crossAxisSpacing: 12,
@@ -1132,15 +1158,14 @@ class StickerFolderPage extends StatelessWidget {
 }
 
 class _EmptyStickers extends StatelessWidget {
-  final VoidCallback onImport;
-  const _EmptyStickers({required this.onImport});
+  const _EmptyStickers();
 
   @override
   Widget build(BuildContext context) => _StickerEmptyState(
     icon: Icons.add_photo_alternate_outlined,
     title: '还没有表情包',
     description: '导入图片后会显示在这里。',
-    actionLabel: '导入表情包',
-    onAction: onImport,
+    actionLabel: null,
+    onAction: null,
   );
 }
