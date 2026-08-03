@@ -269,6 +269,7 @@ class _StickerEntry extends StatelessWidget {
   final Color iconColor;
   final String title;
   final Widget subtitle;
+  final Widget? leading;
   final Widget? trailing;
   final VoidCallback onTap;
   const _StickerEntry({
@@ -276,6 +277,7 @@ class _StickerEntry extends StatelessWidget {
     required this.iconColor,
     required this.title,
     required this.subtitle,
+    this.leading,
     this.trailing,
     required this.onTap,
   });
@@ -283,15 +285,17 @@ class _StickerEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListTile(
     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-    leading: Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: iconColor.withAlpha((0.15 * 255).toInt()),
-        borderRadius: BorderRadius.circular(AppTheme.radiusSm),
-      ),
-      child: Icon(icon, color: iconColor, size: 22),
-    ),
+    leading:
+        leading ??
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: iconColor.withAlpha((0.15 * 255).toInt()),
+            borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+          ),
+          child: Icon(icon, color: iconColor, size: 22),
+        ),
     title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
     subtitle: subtitle,
     trailing: trailing ?? const Icon(Icons.chevron_right, size: 20),
@@ -303,8 +307,8 @@ class _StickerEmptyState extends StatelessWidget {
   final IconData icon;
   final String title;
   final String description;
-  final String actionLabel;
-  final VoidCallback onAction;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   const _StickerEmptyState({
     required this.icon,
@@ -330,14 +334,60 @@ class _StickerEmptyState extends StatelessWidget {
             textAlign: TextAlign.center,
             style: TextStyle(color: Theme.of(context).colorScheme.outline),
           ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: onAction,
-            icon: const Icon(Icons.add_rounded),
-            label: Text(actionLabel),
-          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: onAction,
+              icon: const Icon(Icons.add_rounded),
+              label: Text(actionLabel!),
+            ),
+          ],
         ],
       ),
+    ),
+  );
+}
+
+class _StickerThumbnail extends StatelessWidget {
+  final String? filePath;
+  final IconData fallbackIcon;
+
+  const _StickerThumbnail({required this.filePath, required this.fallbackIcon});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = filePath?.trim() ?? '';
+    final fallback = Icon(
+      fallbackIcon,
+      color: Theme.of(context).colorScheme.tertiary,
+      size: 22,
+    );
+    if (path.isEmpty) return fallback;
+    return Image.file(
+      File(path),
+      fit: BoxFit.cover,
+      cacheWidth: 160,
+      errorBuilder: (_, __, ___) => fallback,
+    );
+  }
+}
+
+class _StickerThumbnailBox extends StatelessWidget {
+  final String? filePath;
+  final IconData fallbackIcon;
+
+  const _StickerThumbnailBox({
+    required this.filePath,
+    required this.fallbackIcon,
+  });
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 40,
+    height: 40,
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+      child: _StickerThumbnail(filePath: filePath, fallbackIcon: fallbackIcon),
     ),
   );
 }
@@ -349,20 +399,14 @@ class StickerGroupListPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('表情包组'),
-        actions: [
-          IconButton(
-            tooltip: '新建表情包组',
-            icon: const Icon(Icons.add_rounded),
-            onPressed: () => StickerGroupListPage._createGroup(context),
-          ),
-        ],
+      appBar: AppBar(title: const Text('表情包组')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => StickerGroupListPage._createGroup(context),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('新建表情包组'),
       ),
       body: state.stickerGroups.isEmpty
-          ? _EmptyGroups(
-              onCreate: () => StickerGroupListPage._createGroup(context),
-            )
+          ? const _EmptyGroups()
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
@@ -378,22 +422,11 @@ class StickerGroupListPage extends StatelessWidget {
                         Builder(
                           builder: (context) {
                             final group = state.stickerGroups[index];
-                            final folders = state.stickerFoldersForGroup(
-                              group.id,
-                            );
-                            final count = folders
-                                .expand(
-                                  (folder) =>
-                                      state.stickersForFolder(folder.id),
-                                )
-                                .length;
                             return _StickerEntry(
                               icon: Icons.collections_bookmark_outlined,
                               iconColor: Theme.of(context).colorScheme.primary,
                               title: group.name,
-                              subtitle: Text(
-                                '${folders.length} 个情绪文件夹 · $count 个表情包',
-                              ),
+                              subtitle: const Text('表情包组'),
                               onTap: () => Navigator.push(
                                 context,
                                 FastRoute(
@@ -449,16 +482,15 @@ class StickerGroupListPage extends StatelessWidget {
 }
 
 class _EmptyGroups extends StatelessWidget {
-  final VoidCallback onCreate;
-  const _EmptyGroups({required this.onCreate});
+  const _EmptyGroups();
 
   @override
   Widget build(BuildContext context) => _StickerEmptyState(
     icon: Icons.emoji_emotions_outlined,
     title: '还没有表情包组',
     description: '创建一个表情包组，再按情绪文件夹整理图片。',
-    actionLabel: '新建表情包组',
-    onAction: onCreate,
+    actionLabel: null,
+    onAction: null,
   );
 }
 
@@ -469,25 +501,33 @@ class StickerGroupPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final folders = state.stickerFoldersForGroup(group.id);
+    final currentGroup =
+        state.stickerGroups.where((item) => item.id == group.id).firstOrNull ??
+        group;
+    final folders = state.stickerFoldersForGroup(currentGroup.id);
     return Scaffold(
       appBar: AppBar(
-        title: Text(group.name),
+        title: Text(currentGroup.name),
         actions: [
+          IconButton(
+            tooltip: '编辑组名',
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: () => _editGroup(context, currentGroup),
+          ),
           IconButton(
             tooltip: '绑定人格',
             icon: const Icon(Icons.people_outline),
-            onPressed: () => _showBindings(context, group),
+            onPressed: () => _showBindings(context, currentGroup),
           ),
           IconButton(
             tooltip: '新建文件夹',
             icon: const Icon(Icons.create_new_folder_outlined),
-            onPressed: () => _createFolder(context, group),
+            onPressed: () => _createFolder(context, currentGroup),
           ),
         ],
       ),
       body: folders.isEmpty
-          ? _EmptyFolders(onCreate: () => _createFolder(context, group))
+          ? _EmptyFolders(onCreate: () => _createFolder(context, currentGroup))
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
@@ -505,6 +545,13 @@ class StickerGroupPage extends StatelessWidget {
                             return _StickerEntry(
                               icon: Icons.folder_outlined,
                               iconColor: Theme.of(context).colorScheme.tertiary,
+                              leading: _StickerThumbnailBox(
+                                filePath: state
+                                    .stickersForFolder(folder.id)
+                                    .firstOrNull
+                                    ?.filePath,
+                                fallbackIcon: Icons.folder_outlined,
+                              ),
                               title: folder.name,
                               subtitle: Text(
                                 folder.description.isEmpty
@@ -544,51 +591,40 @@ class StickerGroupPage extends StatelessWidget {
     );
   }
 
+  static Future<void> _editGroup(
+    BuildContext context,
+    StickerGroup group,
+  ) async {
+    final updatedName = await showDialog<String>(
+      context: context,
+      builder: (_) => _EditStickerGroupDialog(initialName: group.name),
+    );
+    if (updatedName != null && context.mounted) {
+      await context.read<AppState>().updateStickerGroup(
+        StickerGroup(
+          id: group.id,
+          name: updatedName,
+          createdAt: group.createdAt,
+        ),
+      );
+    }
+  }
+
   static Future<void> _createFolder(
     BuildContext context,
     StickerGroup group,
   ) async {
-    final name = TextEditingController();
-    final description = TextEditingController();
-    final saved = await showDialog<bool>(
+    final draft = await showDialog<_StickerFolderDraft>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('新建表情文件夹'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: name,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: '文件夹名称'),
-            ),
-            TextField(
-              controller: description,
-              decoration: const InputDecoration(labelText: '使用场景描述'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('创建'),
-          ),
-        ],
-      ),
+      builder: (_) => const _CreateStickerFolderDialog(),
     );
-    if (saved == true && context.mounted) {
+    if (draft != null && context.mounted) {
       await context.read<AppState>().addStickerFolder(
         groupId: group.id,
-        name: name.text,
-        description: description.text,
+        name: draft.name,
+        description: draft.description,
       );
     }
-    name.dispose();
-    description.dispose();
   }
 
   static void _showBindings(BuildContext context, StickerGroup group) {
@@ -644,6 +680,125 @@ class StickerGroupPage extends StatelessWidget {
   }
 }
 
+class _EditStickerGroupDialog extends StatefulWidget {
+  const _EditStickerGroupDialog({required this.initialName});
+
+  final String initialName;
+
+  @override
+  State<_EditStickerGroupDialog> createState() =>
+      _EditStickerGroupDialogState();
+}
+
+class _EditStickerGroupDialogState extends State<_EditStickerGroupDialog> {
+  late final TextEditingController _nameController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('编辑表情包组'),
+      content: TextField(
+        controller: _nameController,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: '表情包组名称'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final updatedName = _nameController.text.trim();
+            if (updatedName.isNotEmpty) {
+              Navigator.pop(context, updatedName);
+            }
+          },
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+class _StickerFolderDraft {
+  const _StickerFolderDraft({required this.name, required this.description});
+
+  final String name;
+  final String description;
+}
+
+class _CreateStickerFolderDialog extends StatefulWidget {
+  const _CreateStickerFolderDialog();
+
+  @override
+  State<_CreateStickerFolderDialog> createState() =>
+      _CreateStickerFolderDialogState();
+}
+
+class _CreateStickerFolderDialogState
+    extends State<_CreateStickerFolderDialog> {
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('新建表情文件夹'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _nameController,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: '文件夹名称'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _descriptionController,
+            decoration: const InputDecoration(labelText: '使用场景描述'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(
+            context,
+            _StickerFolderDraft(
+              name: _nameController.text,
+              description: _descriptionController.text,
+            ),
+          ),
+          child: const Text('创建'),
+        ),
+      ],
+    );
+  }
+}
+
 class PersonaStickerBindingPage extends StatelessWidget {
   const PersonaStickerBindingPage({super.key});
 
@@ -653,6 +808,11 @@ class PersonaStickerBindingPage extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('人格绑定')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _pickPersona(context),
+        icon: const Icon(Icons.link_rounded),
+        label: const Text('绑定人格'),
+      ),
       body: Column(
         children: [
           _InfoCard(
@@ -730,6 +890,42 @@ class PersonaStickerBindingPage extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  static Future<void> _pickPersona(BuildContext context) async {
+    final state = context.read<AppState>();
+    final personaId = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: state.personas.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: Text('还没有可绑定的人格')),
+              )
+            : ListView(
+                shrinkWrap: true,
+                children: [
+                  const ListTile(
+                    title: Text(
+                      '选择人格',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  for (final persona in state.personas)
+                    ListTile(
+                      leading: const Icon(Icons.person_outline),
+                      title: Text(persona.name),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.pop(sheetContext, persona.id),
+                    ),
+                ],
+              ),
+      ),
+    );
+    if (personaId != null && context.mounted) {
+      _showGroups(context, personaId);
+    }
   }
 
   static void _showGroups(BuildContext context, String personaId) {
@@ -827,7 +1023,7 @@ class StickerFolderPage extends StatelessWidget {
                 maxCrossAxisExtent: 150,
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
-                childAspectRatio: .8,
+                childAspectRatio: 1,
               ),
               itemCount: stickers.length,
               itemBuilder: (_, index) {
@@ -856,12 +1052,6 @@ class StickerFolderPage extends StatelessWidget {
                                         const Icon(Icons.broken_image_outlined),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                sticker.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
                             ],
                           ),
@@ -920,7 +1110,7 @@ class StickerFolderPage extends StatelessWidget {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('删除表情包'),
-        content: Text('确定删除「${sticker.name}」吗？'),
+        content: const Text('确定删除这张表情包吗？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
