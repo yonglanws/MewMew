@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -8,6 +7,7 @@ import '../services/logger_service.dart';
 import '../state/app_state.dart';
 import '../utils/fast_route.dart';
 import '../utils/large_app_bar_title.dart';
+import '../widgets/settings_switch_action.dart';
 import 'dashboard_page.dart';
 import 'memory_page.dart';
 
@@ -29,6 +29,19 @@ class MemorySettingsPage extends StatelessWidget {
     final memoryDisabled = !isMemoryEnabled;
 
     return Scaffold(
+      floatingActionButton: SettingsSwitchFab(
+        icon: state.injectMemories && embeddingValid
+            ? Icons.toggle_on_outlined
+            : Icons.toggle_off_outlined,
+        label: !embeddingValid
+            ? '配置嵌入 API'
+            : (state.injectMemories ? '关闭记忆系统' : '开启记忆系统'),
+        onPressed: !embeddingValid
+            ? null
+            : () => context.read<AppState>().setInjectMemories(
+                !state.injectMemories,
+              ),
+      ),
       body: CustomScrollView(
         slivers: [
           SliverAppBar.large(
@@ -97,12 +110,7 @@ class MemorySettingsPage extends StatelessWidget {
                   subtitle: state.injectMemories && embeddingValid
                       ? '已开启：对话中自动检索并注入长期记忆'
                       : (embeddingValid ? '已关闭：暂不注入长期记忆' : '已关闭（未配置嵌入模型）'),
-                  trailing: Switch(
-                    value: state.injectMemories && embeddingValid,
-                    onChanged: !embeddingValid
-                        ? null
-                        : (v) => context.read<AppState>().setInjectMemories(v),
-                  ),
+                  isEnabled: embeddingValid,
                 ),
               ],
             ),
@@ -311,7 +319,7 @@ class MemorySettingsPage extends StatelessWidget {
               ],
             ),
           ),
-          const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
+          const SliverPadding(padding: EdgeInsets.only(bottom: 104)),
         ],
       ),
     );
@@ -1153,21 +1161,21 @@ class _SettingTile extends StatelessWidget {
   final Color iconColor;
   final String title;
   final String subtitle;
-  final Widget? trailing;
   final VoidCallback? onTap;
+  final bool? isEnabled;
 
   const _SettingTile({
     required this.icon,
     required this.iconColor,
     required this.title,
     required this.subtitle,
-    this.trailing,
     this.onTap,
+    this.isEnabled,
   });
 
   @override
   Widget build(BuildContext context) {
-    final disabled = onTap == null;
+    final disabled = isEnabled == false || (isEnabled == null && onTap == null);
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       leading: Container(
@@ -1197,9 +1205,9 @@ class _SettingTile extends StatelessWidget {
           color: disabled ? Theme.of(context).colorScheme.outline : null,
         ),
       ),
-      trailing:
-          trailing ??
-          (onTap == null ? null : const Icon(Icons.chevron_right, size: 20)),
+      trailing: onTap == null
+          ? null
+          : const Icon(Icons.chevron_right, size: 20),
       onTap: onTap,
     );
   }
