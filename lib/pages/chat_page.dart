@@ -1201,6 +1201,7 @@ class _MessageBlock extends StatelessWidget {
     final isUser = message.role == 'user';
     final isTool = message.role == 'tool';
     final sticker = context.read<AppState>().stickerById(message.stickerId);
+    final stickerUnavailable = message.stickerId != null && sticker == null;
 
     if (isTool) {
       return Padding(
@@ -1335,7 +1336,9 @@ class _MessageBlock extends StatelessWidget {
                   enabled:
                       playEntrance ||
                       (isSegmented &&
-                          (message.content.isNotEmpty || sticker != null)),
+                          (message.content.isNotEmpty ||
+                              sticker != null ||
+                              stickerUnavailable)),
                   emphasis: isSegmented,
                   child: sticker != null
                       ? ChatImagePreview(
@@ -1353,14 +1356,8 @@ class _MessageBlock extends StatelessWidget {
                                 File(sticker.filePath),
                                 fit: BoxFit.contain,
                                 cacheWidth: 480,
-                                errorBuilder: (_, __, ___) => SizedBox(
-                                  width: 72,
-                                  height: 72,
-                                  child: Icon(
-                                    Icons.broken_image_outlined,
-                                    color: scheme.outline,
-                                  ),
-                                ),
+                                errorBuilder: (_, __, ___) =>
+                                    const StickerUnavailablePlaceholder(),
                               ),
                             ),
                           ),
@@ -1379,13 +1376,16 @@ class _MessageBlock extends StatelessWidget {
                               bottomRight: Radius.circular(20),
                             ),
                           ),
-                          child: isStreaming && message.content.isEmpty
+                          child: stickerUnavailable
+                              ? const StickerUnavailablePlaceholder()
+                              : isStreaming && message.content.isEmpty
                               ? _TypingDots(color: scheme.primary)
                               : _StreamingMarkdown(
                                   content: message.content,
                                   active: isStreaming && !isSegmented,
                                   child: StickerMessageBody(
                                     content: message.content,
+                                    personaId: displayPersona?.id,
                                     styleSheet: markdownStyleSheet,
                                   ),
                                 ),

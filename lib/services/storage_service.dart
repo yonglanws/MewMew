@@ -29,6 +29,7 @@ class StorageService {
   static const _kTypingDebounceEnabled = 'typing_debounce_enabled';
   static const _kSegmentedSendSettings = 'segmented_send_settings';
   static const _kStreamOutputEnabled = 'stream_output_enabled';
+  static const _kStickerSendProbability = 'sticker_send_probability';
   static const _kStickerItems = 'sticker_items_v2';
   static const _kStickerFolders = 'sticker_folders_v2';
   static const _kStickerGroups = 'sticker_groups_v2';
@@ -220,6 +221,11 @@ class StorageService {
   bool get streamOutputEnabled => _prefs.getBool(_kStreamOutputEnabled) ?? true;
   Future<void> setStreamOutputEnabled(bool v) =>
       _prefs.setBool(_kStreamOutputEnabled, v);
+
+  int get stickerSendProbability =>
+      _prefs.getInt(_kStickerSendProbability) ?? 10;
+  Future<void> setStickerSendProbability(int value) =>
+      _prefs.setInt(_kStickerSendProbability, value);
 
   // Token 使用统计
   TokenUsage loadTokenUsage() {

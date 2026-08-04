@@ -16,6 +16,7 @@ import '../services/segmented_splitter.dart';
 import '../services/storage_service.dart';
 import '../services/sticker_storage_service.dart';
 import '../services/tool_service.dart';
+import 'sticker_selection.dart';
 
 const _uuid = Uuid();
 
@@ -49,6 +50,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   bool isSending = false;
   String? lastError;
   CancelToken? _cancelToken;
+  final Random _stickerRandom = Random();
   final Queue<_PendingReply> _pendingReplies = Queue<_PendingReply>();
   bool _streamNotifyScheduled = false;
   final Set<Timer> _segmentVisualTimers = {};
@@ -201,6 +203,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   // 流式输出（默认开启；与对话分段发送互斥，关闭流式后才能启用分段发送）
   bool streamOutputEnabled = true;
+  int stickerSendProbability = 10;
   int maxStickersPerMessage = 2;
   bool get stickersEnabled => !streamOutputEnabled;
 
@@ -292,6 +295,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  Future<void> setStickerSendProbability(int value) async {
+    stickerSendProbability = value.clamp(0, 100);
+    await _storage.setStickerSendProbability(stickerSendProbability);
+    notifyListeners();
+  }
+
   List<StickerGroup> stickerGroupsForPersona(String personaId) {
     final ids = personaStickerBindings
         .where((binding) => binding.personaId == personaId)
@@ -302,6 +311,41 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   List<StickerFolder> stickerFoldersForGroup(String groupId) =>
       stickerFolders.where((folder) => folder.groupId == groupId).toList();
+
+  List<StickerFolder> stickerFoldersForPersona(String? personaId) {
+    final id = personaId?.trim() ?? '';
+    if (id.isEmpty) return const [];
+    final groupIds = stickerGroupsForPersona(
+      id,
+    ).map((group) => group.id).toSet();
+    return stickerFolders
+        .where((folder) => groupIds.contains(folder.groupId))
+        .toList();
+  }
+
+  List<StickerItem> stickersForPersonaFolder(
+    String? personaId,
+    String folderName,
+  ) {
+    return StickerSelection.stickersForFolderName(
+      personaId: personaId,
+      folderName: folderName,
+      stickerGroups: stickerGroups,
+      stickerFolders: stickerFolders,
+      stickers: stickers,
+      bindings: personaStickerBindings,
+    );
+  }
+
+  StickerItem? pickStickerForPersonaFolder(
+    String? personaId,
+    String folderName,
+  ) {
+    return StickerSelection.pickSticker(
+      stickersForPersonaFolder(personaId, folderName),
+      random: _stickerRandom,
+    );
+  }
 
   List<StickerItem> stickersForFolder(String folderId) =>
       stickers.where((sticker) => sticker.folderId == folderId).toList();
@@ -438,6 +482,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   StickerItem? stickerById(String? id) {
     if (id == null) return null;
     return stickers.where((sticker) => sticker.id == id).firstOrNull;
+  }
+
+  StickerFolder? stickerFolderForSticker(String? stickerId) {
+    final sticker = stickerById(stickerId);
+    if (sticker == null) return null;
+    return stickerFolders
+        .where((folder) => folder.id == sticker.folderId)
+        .firstOrNull;
   }
 
   Future<void> addSticker({
@@ -622,8 +674,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// 检查并触发对话总结
   Future<void> _checkAndSummarize(ChatSession session) async {
     if (!memorySettings.autoSummaryEnabled ||
-        _summariesInFlight.contains(session.id))
+        _summariesInFlight.contains(session.id)) {
       return;
+    }
     // 嵌入未配置时禁用记忆系统
     if (!embeddingApiConfig.isValid) return;
 
@@ -999,6 +1052,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     messageMergeDebounce = _storage.messageMergeDebounce;
     typingDebounceEnabled = _storage.typingDebounceEnabled;
     streamOutputEnabled = _storage.streamOutputEnabled;
+    stickerSendProbability = _storage.stickerSendProbability.clamp(0, 100);
     segmentedSendSettings = _storage.loadSegmentedSendSettings();
     memorySettings = _storage.loadMemorySettings();
     tokenUsage = _storage.loadTokenUsage();
@@ -1852,26 +1906,31 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     );
     if (stickersEnabled) {
       final stickerPersonaId = isGroup ? speaker?.id : persona?.id;
-      final available = stickersForPersona(
-        stickerPersonaId,
-      ).where((sticker) => sticker.name.isNotEmpty).toList();
-      if (available.isNotEmpty) {
+      final folderEntries = <String, String>{};
+      for (final folder in stickerFoldersForPersona(stickerPersonaId)) {
+        final name = folder.name.trim();
+        if (name.isEmpty ||
+            stickersForPersonaFolder(stickerPersonaId, name).isEmpty) {
+          continue;
+        }
+        final description = folder.description.trim();
+        folderEntries[name] = folderEntries.containsKey(name)
+            ? '${folderEntries[name]}${description.isEmpty ? '' : '；$description'}'
+            : description;
+      }
+      if (folderEntries.isNotEmpty) {
         buf.writeln('\n【贴纸】在回答用户问题时，你可以在自然语言的基础上，使用贴纸来增强表达效果。');
         buf.writeln('使用规则：');
-        buf.writeln('1. 你只能使用清单中提供的贴纸名字。');
-        buf.writeln('2. 当你需要使用贴纸时，请插入 XML 标签：<sticker name="贴纸名字"/>。');
+        buf.writeln('1. 你只能使用清单中提供的情绪分组名称。');
+        buf.writeln('2. 当你需要使用贴纸时，请插入 XML 标签：<sticker name="情绪分组名称"/>。');
         buf.writeln('3. 每条消息最多使用 $maxStickersPerMessage 个贴纸。');
         buf.writeln('4. 回答应自然流畅，贴纸仅作辅助，不要过度使用。');
-        buf.writeln('5. 根据上下文选择合适贴纸，每条消息使用贴纸标签的概率控制在 10% 以内。');
-        buf.writeln('「贴纸清单」：');
-        for (final sticker in available) {
-          final folder = stickerFolders
-              .where((item) => item.id == sticker.folderId)
-              .firstOrNull;
-          final detail = sticker.description.isEmpty
-              ? (folder?.name ?? '')
-              : sticker.description;
-          buf.writeln('- ${sticker.name}：$detail');
+        buf.writeln(
+          '5. 根据上下文选择合适的情绪分组，每条消息使用贴纸的概率约为 $stickerSendProbability%。',
+        );
+        buf.writeln('「情绪分组清单」：');
+        for (final entry in folderEntries.entries) {
+          buf.writeln('- ${entry.key}：${entry.value}');
         }
       }
     }
@@ -1888,13 +1947,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       ...session.messages.where((m) => m.role != 'tool').map((m) {
         if (m.stickerId != null) {
           final sticker = stickerById(m.stickerId);
+          final folder = stickerFolderForSticker(m.stickerId);
+          final label = folder?.name ?? sticker?.name ?? '未知情绪';
           return {
             'role': m.role,
             'content': sticker == null
                 ? '【发送了一个不可用的表情包】'
                 : m.role == 'assistant'
-                ? '【助手发送了表情包：${sticker.name}】'
-                : '【用户发送了表情包：${sticker.name}】',
+                ? '【助手发送了表情包：$label】'
+                : '【用户发送了表情包：$label】',
           };
         }
         if (m.role == 'assistant' && isGroup && m.speakerId != null) {
@@ -2111,16 +2172,20 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final parsed = <_AssistantPart>[];
     var start = 0;
     var stickerCount = 0;
+    final canUseStickers =
+        stickersEnabled &&
+        StickerSelection.allowsSticker(
+          probability: stickerSendProbability,
+          random: _stickerRandom,
+        );
     for (final match in _stickerTagPattern.allMatches(content)) {
       final text = content.substring(start, match.start).trim();
       if (text.isNotEmpty) parsed.add(_AssistantPart.text(text));
       final name = match.group(1)?.trim() ?? '';
-      final sticker = stickersForPersona(
-        personaId,
-      ).where((item) => item.name == name).firstOrNull;
-      if (stickersEnabled &&
-          sticker != null &&
-          stickerCount < maxStickersPerMessage) {
+      final sticker = canUseStickers && stickerCount < maxStickersPerMessage
+          ? pickStickerForPersonaFolder(personaId, name)
+          : null;
+      if (sticker != null) {
         parsed.add(_AssistantPart.sticker(sticker.id));
         stickerCount++;
       }

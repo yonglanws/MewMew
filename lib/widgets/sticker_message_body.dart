@@ -7,13 +7,32 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import 'chat_image_preview.dart';
 
+class StickerUnavailablePlaceholder extends StatelessWidget {
+  const StickerUnavailablePlaceholder({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.outline;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.broken_image_outlined, color: color, size: 20),
+        const SizedBox(width: 8),
+        Text('表情包不可用', style: TextStyle(color: color)),
+      ],
+    );
+  }
+}
+
 class StickerMessageBody extends StatelessWidget {
   final String content;
+  final String? personaId;
   final MarkdownStyleSheet styleSheet;
 
   const StickerMessageBody({
     super.key,
     required this.content,
+    this.personaId,
     required this.styleSheet,
   });
 
@@ -44,12 +63,11 @@ class StickerMessageBody extends StatelessWidget {
         );
       }
       final name = match.group(1)!.trim();
-      final sticker = state.stickers
-          .where((item) => item.name == name)
-          .firstOrNull;
-      if (state.stickersEnabled &&
-          sticker != null &&
-          count < state.maxStickersPerMessage) {
+      final sticker =
+          state.stickersEnabled && count < state.maxStickersPerMessage
+          ? state.pickStickerForPersonaFolder(personaId, name)
+          : null;
+      if (sticker != null) {
         children.add(
           ChatImagePreview(
             filePath: sticker.filePath,
