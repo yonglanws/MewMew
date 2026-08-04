@@ -34,6 +34,7 @@ class StorageService {
   static const _kStickerFolders = 'sticker_folders_v2';
   static const _kStickerGroups = 'sticker_groups_v2';
   static const _kPersonaStickerBindings = 'persona_sticker_bindings_v2';
+  static const _kPersonaStickerSettings = 'persona_sticker_settings_v1';
 
   late SharedPreferences _prefs;
 
@@ -122,6 +123,10 @@ class StorageService {
       _loadList(_kPersonaStickerBindings, PersonaStickerBinding.fromJson);
   Future<void> savePersonaStickerBindings(List<PersonaStickerBinding> list) =>
       _saveList(_kPersonaStickerBindings, list);
+  List<PersonaStickerSettings> loadPersonaStickerSettings() =>
+      _loadList(_kPersonaStickerSettings, PersonaStickerSettings.fromJson);
+  Future<void> savePersonaStickerSettings(List<PersonaStickerSettings> list) =>
+      _saveList(_kPersonaStickerSettings, list);
 
   Future<void> clearLegacyStickerData() async {
     await Future.wait([

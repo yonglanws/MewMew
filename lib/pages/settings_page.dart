@@ -10,7 +10,6 @@ import 'message_debounce_settings_page.dart';
 import 'persona_page.dart';
 import 'segmented_send_settings_page.dart';
 import 'sticker_management_page.dart';
-import 'sticker_send_settings_page.dart';
 import 'tools_page.dart';
 
 /// 设置页：按功能分组的列表
@@ -130,16 +129,9 @@ class SettingsPage extends StatelessWidget {
                 _SettingTile(
                   icon: Icons.emoji_emotions_outlined,
                   iconColor: cs.tertiary,
-                  title: '表情包管理器',
-                  subtitle: '按角色与情绪管理表情包',
+                  title: '表情包',
+                  subtitle: '管理表情包资源与人格偏好',
                   onTap: () => _push(context, const StickerManagementPage()),
-                ),
-                _SettingTile(
-                  icon: Icons.tune_outlined,
-                  iconColor: cs.primary,
-                  title: '表情包发送频率',
-                  subtitle: '调整 Agent 使用表情包的概率',
-                  onTap: () => _push(context, const StickerSendSettingsPage()),
                 ),
                 _SettingTile(
                   icon: Icons.merge_type_outlined,

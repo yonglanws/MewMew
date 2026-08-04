@@ -132,6 +132,46 @@ void main() {
     );
   });
 
+  test('100%发送频率会要求 AI 在有合适情绪时输出标签并说明不会强制生成', () {
+    final instruction = stickerFrequencyInstruction(100);
+
+    expect(instruction, contains('需要使用表情包时必须使用标签'));
+    expect(instruction, contains('不要为了满足概率凭空添加表情包'));
+    expect(instruction, contains('不会替 AI 生成标签'));
+  });
+
+  test('表情包提示词明确协议、名称匹配和自定义偏好的边界', () {
+    final prompt = buildStickerPromptSection(
+      maxStickersPerMessage: 2,
+      sendProbability: 50,
+      folderEntries: {'开心': '表达开心的情绪'},
+      customPrompt: '开心时优先使用可爱的表情。',
+    );
+
+    expect(prompt, contains('标签放行概率'));
+    expect(prompt, contains('name 必须与清单中的名称逐字匹配'));
+    expect(prompt, contains('不要把标签放在 Markdown 代码块、引号、示例或解释文字中'));
+    expect(prompt, contains('【人格表情使用策略（用户自定义）】'));
+    expect(prompt, contains('不能覆盖上面的协议、清单或数量限制'));
+  });
+
+  test('用户自定义提示词会控制发送时机、情绪偏好、回避条件和表达风格', () {
+    final prompt = buildStickerPromptSection(
+      maxStickersPerMessage: 2,
+      sendProbability: 50,
+      folderEntries: {'开心': '表达开心的情绪'},
+      customPrompt: '被夸奖时优先使用开心，讨论严肃问题时不要发送。',
+    );
+
+    expect(prompt, contains('什么时候发送'));
+    expect(prompt, contains('优先哪些情绪'));
+    expect(prompt, contains('哪些情绪或场景应回避'));
+    expect(prompt, contains('表达风格'));
+    expect(prompt, contains('<sticker_preference>'));
+    expect(prompt, contains('</sticker_preference>'));
+    expect(prompt, contains('只有适合当前语境时才使用表情包标签'));
+  });
+
   test('流式输出开启时保持禁用表情包，关闭后才允许使用', () {
     final state = AppState(StorageService());
     addTearDown(state.dispose);
@@ -141,6 +181,149 @@ void main() {
 
     state.streamOutputEnabled = false;
     expect(state.stickersEnabled, isTrue);
+  });
+
+  test('人格表情包设置按人格持久化并保持默认值', () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = StorageService();
+    await storage.init();
+    final state = AppState(storage);
+    addTearDown(state.dispose);
+
+    expect(state.personaStickerSettingsFor('persona-1').sendProbability, 10);
+
+    await state.setPersonaStickerSettings(
+      PersonaStickerSettings(
+        personaId: 'persona-1',
+        sendProbability: 65,
+        preferredFolderIds: ['folder-happy'],
+        customPrompt: '开心时优先发送轻松可爱的表情。',
+      ),
+    );
+
+    final reloadedStorage = StorageService();
+    await reloadedStorage.init();
+    final saved = reloadedStorage.loadPersonaStickerSettings().single;
+    expect(saved.sendProbability, 65);
+    expect(saved.preferredFolderIds, ['folder-happy']);
+    expect(saved.customPrompt, '开心时优先发送轻松可爱的表情。');
+  });
+
+  test('人格偏好情绪分组会限制可抽取的表情包', () {
+    final state = AppState(StorageService())
+      ..stickerGroups = [
+        StickerGroup(id: 'group-1', name: '日常', createdAt: DateTime(2026)),
+      ]
+      ..stickerFolders = [
+        StickerFolder(
+          id: 'folder-happy',
+          groupId: 'group-1',
+          name: '开心',
+          description: '',
+          createdAt: DateTime(2026),
+        ),
+        StickerFolder(
+          id: 'folder-sad',
+          groupId: 'group-1',
+          name: '难过',
+          description: '',
+          createdAt: DateTime(2026),
+        ),
+      ]
+      ..stickers = [
+        StickerItem(
+          id: 'sticker-happy',
+          folderId: 'folder-happy',
+          name: '',
+          description: '',
+          filePath: 'happy.png',
+          createdAt: DateTime(2026),
+        ),
+        StickerItem(
+          id: 'sticker-sad',
+          folderId: 'folder-sad',
+          name: '',
+          description: '',
+          filePath: 'sad.png',
+          createdAt: DateTime(2026),
+        ),
+      ]
+      ..personaStickerBindings = [
+        PersonaStickerBinding(
+          personaId: 'persona-1',
+          groupId: 'group-1',
+          createdAt: DateTime(2026),
+        ),
+      ]
+      ..personaStickerSettings = [
+        PersonaStickerSettings(
+          personaId: 'persona-1',
+          preferredFolderIds: ['folder-happy'],
+        ),
+      ];
+    addTearDown(state.dispose);
+
+    expect(state.stickersForPersonaFolder('persona-1', '开心').map((e) => e.id), [
+      'sticker-happy',
+    ]);
+    expect(state.stickersForPersonaFolder('persona-1', '难过'), isEmpty);
+  });
+
+  test('删除情绪分组后清理人格失效偏好并回退到全部可用分组', () async {
+    SharedPreferences.setMockInitialValues({});
+    final storage = StorageService();
+    await storage.init();
+    final state = AppState(storage)
+      ..stickerGroups = [
+        StickerGroup(id: 'group-1', name: '日常', createdAt: DateTime(2026)),
+      ]
+      ..stickerFolders = [
+        StickerFolder(
+          id: 'folder-deleted',
+          groupId: 'group-1',
+          name: '已删除',
+          description: '',
+          createdAt: DateTime(2026),
+        ),
+        StickerFolder(
+          id: 'folder-remaining',
+          groupId: 'group-1',
+          name: '开心',
+          description: '',
+          createdAt: DateTime(2026),
+        ),
+      ]
+      ..stickers = [
+        StickerItem(
+          id: 'sticker-remaining',
+          folderId: 'folder-remaining',
+          name: '',
+          description: '',
+          filePath: 'remaining.png',
+          createdAt: DateTime(2026),
+        ),
+      ]
+      ..personaStickerBindings = [
+        PersonaStickerBinding(
+          personaId: 'persona-1',
+          groupId: 'group-1',
+          createdAt: DateTime(2026),
+        ),
+      ]
+      ..personaStickerSettings = [
+        PersonaStickerSettings(
+          personaId: 'persona-1',
+          preferredFolderIds: ['folder-deleted'],
+        ),
+      ];
+    addTearDown(state.dispose);
+
+    await state.removeStickerFolder('folder-deleted');
+
+    expect(state.personaStickerSettings.single.preferredFolderIds, isEmpty);
+    expect(state.stickersForPersonaFolder('persona-1', '开心').map((e) => e.id), [
+      'sticker-remaining',
+    ]);
   });
 }
 

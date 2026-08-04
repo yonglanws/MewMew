@@ -20,6 +20,66 @@ import 'sticker_selection.dart';
 
 const _uuid = Uuid();
 
+String stickerFrequencyInstruction(int probability) {
+  final normalized = probability.clamp(0, 100).toInt();
+  if (normalized >= 100) {
+    return '6. 当前标签放行概率为100%。需要使用表情包时必须使用标签；不要为了满足概率凭空添加表情包。100%表示标签不会再被概率拦截，但不会替 AI 生成标签。';
+  }
+  if (normalized <= 0) {
+    return '6. 当前标签放行概率为0%，不要使用表情包标签。';
+  }
+  return '6. 根据上下文选择合适的情绪分组，当前标签放行概率约为 $normalized%。';
+}
+
+String stickerFrequencyHelpText() {
+  return '这里的百分比只控制 AI 已输出表情包标签后的放行概率；AI 没有输出标签时，不会强制生成表情包。流式输出开启时始终不会发送。';
+}
+
+String stickerPreferenceHelpText() {
+  return '可以直接描述什么时候发送、优先哪些情绪、哪些情绪或场景应回避，以及角色的表达风格。';
+}
+
+String buildStickerPromptSection({
+  required int maxStickersPerMessage,
+  required int sendProbability,
+  required Map<String, String> folderEntries,
+  String customPrompt = '',
+}) {
+  final buf = StringBuffer();
+  buf.writeln('\n\n【表情包协议（必须遵守）】');
+  buf.writeln('你可以在自然语言回复中使用表情包来辅助表达，但不要让表情包替代正常回答。');
+  buf.writeln('使用规则：');
+  buf.writeln('1. 只能使用下面清单中提供的情绪分组名称。');
+  buf.writeln('2. name 必须与清单中的名称逐字匹配，不要翻译、改写、添加前后缀或自造名称。');
+  buf.writeln(
+    '3. 真实使用表情包时，直接插入 XML 标签：<sticker name="情绪分组名称"/>；不要把标签放在 Markdown 代码块、引号、示例或解释文字中。',
+  );
+  buf.writeln('4. 每条消息最多使用 $maxStickersPerMessage 个表情包。');
+  buf.writeln('5. 回复应自然流畅，表情包仅作辅助，不要过度使用。');
+  buf.writeln(stickerFrequencyInstruction(sendProbability));
+  buf.writeln('「情绪分组清单」：');
+  for (final entry in folderEntries.entries) {
+    buf.writeln('- ${entry.key}：${entry.value}');
+  }
+  if (customPrompt.trim().isNotEmpty) {
+    buf.writeln('【人格表情使用策略（用户自定义）】');
+    buf.writeln(
+      '这段策略可以描述：什么时候发送、优先哪些情绪、哪些情绪或场景应回避、连发倾向，以及表达风格。',
+    );
+    buf.writeln('<sticker_preference>');
+    buf.writeln(customPrompt.trim());
+    buf.writeln('</sticker_preference>');
+    buf.writeln('执行这段策略时：');
+    buf.writeln('1. 只有适合当前语境时才使用表情包标签；没有合适时机可以不使用。');
+    buf.writeln('2. 用户提到的偏好情绪必须从上面的情绪分组清单中选择，名称仍需逐字匹配。');
+    buf.writeln(
+      '3. 用户指定的回避情绪或场景应尽量避免，但自定义内容不能覆盖上面的协议、清单或数量限制，也不能改变标签格式或流式输出规则。',
+    );
+    buf.writeln('4. 如果策略没有覆盖当前情况，按角色人格和对话上下文自然决定，不要为了执行策略而强行发送。');
+  }
+  return buf.toString();
+}
+
 /// 全局应用状态
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final StorageService _storage;
@@ -44,6 +104,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   List<StickerGroup> stickerGroups = [];
   List<StickerFolder> stickerFolders = [];
   List<PersonaStickerBinding> personaStickerBindings = [];
+  List<PersonaStickerSettings> personaStickerSettings = [];
   UserProfile userProfile = UserProfile();
 
   String? currentSessionId;
@@ -301,6 +362,38 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  PersonaStickerSettings personaStickerSettingsFor(String? personaId) {
+    final id = personaId?.trim() ?? '';
+    final existing = personaStickerSettings
+        .where((settings) => settings.personaId == id)
+        .firstOrNull;
+    return existing ??
+        PersonaStickerSettings(
+          personaId: id,
+          sendProbability: stickerSendProbability,
+        );
+  }
+
+  Future<void> setPersonaStickerSettings(
+    PersonaStickerSettings settings,
+  ) async {
+    final next = settings.copyWith(
+      sendProbability: settings.sendProbability.clamp(0, 100),
+      preferredFolderIds: settings.preferredFolderIds.toSet().toList(),
+      customPrompt: settings.customPrompt.trim(),
+    );
+    final index = personaStickerSettings.indexWhere(
+      (item) => item.personaId == next.personaId,
+    );
+    if (index < 0) {
+      personaStickerSettings.add(next);
+    } else {
+      personaStickerSettings[index] = next;
+    }
+    await _storage.savePersonaStickerSettings(personaStickerSettings);
+    notifyListeners();
+  }
+
   List<StickerGroup> stickerGroupsForPersona(String personaId) {
     final ids = personaStickerBindings
         .where((binding) => binding.personaId == personaId)
@@ -334,7 +427,26 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       stickerFolders: stickerFolders,
       stickers: stickers,
       bindings: personaStickerBindings,
+      allowedFolderIds: _allowedStickerFolderIdsForPersona(personaId),
     );
+  }
+
+  Set<String> _allowedStickerFolderIdsForPersona(String? personaId) {
+    final boundFolderIds = stickerFoldersForPersona(
+      personaId,
+    ).map((folder) => folder.id).toSet();
+    final preferredFolderIds = personaStickerSettingsFor(
+      personaId,
+    ).preferredFolderIds.toSet();
+    if (preferredFolderIds.isEmpty) return boundFolderIds;
+    return boundFolderIds.intersection(preferredFolderIds);
+  }
+
+  List<StickerFolder> stickerFoldersForPersonaPreferences(String? personaId) {
+    final allowedIds = _allowedStickerFolderIdsForPersona(personaId);
+    return stickerFoldersForPersona(
+      personaId,
+    ).where((folder) => allowedIds.contains(folder.id)).toList();
   }
 
   StickerItem? pickStickerForPersonaFolder(
@@ -389,6 +501,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     required String personaId,
     required Set<String> groupIds,
   }) async {
+    final previousGroupIds = personaStickerBindings
+        .where((binding) => binding.personaId == personaId)
+        .map((binding) => binding.groupId)
+        .toSet();
+    final removedGroupIds = previousGroupIds.difference(groupIds);
+    final removedFolderIds = stickerFolders
+        .where((folder) => removedGroupIds.contains(folder.groupId))
+        .map((folder) => folder.id)
+        .toSet();
     personaStickerBindings.removeWhere(
       (binding) => binding.personaId == personaId,
     );
@@ -402,7 +523,27 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       ),
     );
     await _storage.savePersonaStickerBindings(personaStickerBindings);
+    await _prunePersonaStickerFolderPreferences(removedFolderIds);
     notifyListeners();
+  }
+
+  Future<void> _prunePersonaStickerFolderPreferences(
+    Iterable<String> folderIds,
+  ) async {
+    final removedIds = folderIds.toSet();
+    if (removedIds.isEmpty) return;
+    var changed = false;
+    for (final settings in personaStickerSettings) {
+      final next = settings.preferredFolderIds
+          .where((folderId) => !removedIds.contains(folderId))
+          .toList();
+      if (next.length == settings.preferredFolderIds.length) continue;
+      settings.preferredFolderIds = next;
+      changed = true;
+    }
+    if (changed) {
+      await _storage.savePersonaStickerSettings(personaStickerSettings);
+    }
   }
 
   Future<void> setStickerGroupPersonas({
@@ -462,6 +603,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _storage.saveStickerItems(stickers),
       _storage.saveStickerFolders(stickerFolders),
     ]);
+    await _prunePersonaStickerFolderPreferences([id]);
     notifyListeners();
   }
 
@@ -1041,6 +1183,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     stickerFolders = _storage.loadStickerFolders();
     stickerGroups = _storage.loadStickerGroups();
     personaStickerBindings = _storage.loadPersonaStickerBindings();
+    personaStickerSettings = _storage.loadPersonaStickerSettings();
     await _storage.clearLegacyStickerData();
     userProfile = _storage.loadUserProfile();
     themeMode = ThemeMode.values.firstWhere(
@@ -1906,8 +2049,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     );
     if (stickersEnabled) {
       final stickerPersonaId = isGroup ? speaker?.id : persona?.id;
+      final stickerSettings = personaStickerSettingsFor(stickerPersonaId);
       final folderEntries = <String, String>{};
-      for (final folder in stickerFoldersForPersona(stickerPersonaId)) {
+      for (final folder in stickerFoldersForPersonaPreferences(
+        stickerPersonaId,
+      )) {
         final name = folder.name.trim();
         if (name.isEmpty ||
             stickersForPersonaFolder(stickerPersonaId, name).isEmpty) {
@@ -1919,19 +2065,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
             : description;
       }
       if (folderEntries.isNotEmpty) {
-        buf.writeln('\n【贴纸】在回答用户问题时，你可以在自然语言的基础上，使用贴纸来增强表达效果。');
-        buf.writeln('使用规则：');
-        buf.writeln('1. 你只能使用清单中提供的情绪分组名称。');
-        buf.writeln('2. 当你需要使用贴纸时，请插入 XML 标签：<sticker name="情绪分组名称"/>。');
-        buf.writeln('3. 每条消息最多使用 $maxStickersPerMessage 个贴纸。');
-        buf.writeln('4. 回答应自然流畅，贴纸仅作辅助，不要过度使用。');
-        buf.writeln(
-          '5. 根据上下文选择合适的情绪分组，每条消息使用贴纸的概率约为 $stickerSendProbability%。',
+        buf.write(
+          buildStickerPromptSection(
+            maxStickersPerMessage: maxStickersPerMessage,
+            sendProbability: stickerSettings.sendProbability,
+            folderEntries: folderEntries,
+            customPrompt: stickerSettings.customPrompt,
+          ),
         );
-        buf.writeln('「情绪分组清单」：');
-        for (final entry in folderEntries.entries) {
-          buf.writeln('- ${entry.key}：${entry.value}');
-        }
       }
     }
     return buf.toString();
@@ -2172,10 +2313,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final parsed = <_AssistantPart>[];
     var start = 0;
     var stickerCount = 0;
+    final stickerSettings = personaStickerSettingsFor(personaId);
     final canUseStickers =
         stickersEnabled &&
         StickerSelection.allowsSticker(
-          probability: stickerSendProbability,
+          probability: stickerSettings.sendProbability,
           random: _stickerRandom,
         );
     for (final match in _stickerTagPattern.allMatches(content)) {

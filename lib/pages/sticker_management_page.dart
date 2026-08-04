@@ -26,7 +26,7 @@ class StickerManagementPage extends StatelessWidget {
               icon: const Icon(Icons.arrow_back_ios_new),
               onPressed: () => Navigator.pop(context),
             ),
-            title: Text('表情包管理', style: largeAppBarTitleStyle(context)),
+            title: Text('表情包', style: largeAppBarTitleStyle(context)),
           ),
           SliverToBoxAdapter(
             child: _StickerOverviewCard(
@@ -56,19 +56,17 @@ class StickerManagementPage extends StatelessWidget {
           ),
           SliverToBoxAdapter(
             child: _StickerSection(
-              title: '使用关系',
+              title: '个性化设置',
               children: [
                 _StickerEntry(
-                  icon: Icons.people_outline,
-                  iconColor: cs.tertiary,
-                  title: '人格绑定',
-                  subtitle: Text(
-                    '${state.personas.length} 个人格 · ${state.personaStickerBindings.length} 条绑定关系',
-                  ),
+                  icon: Icons.tune_rounded,
+                  iconColor: cs.primary,
+                  title: '表情包管理器',
+                  subtitle: const Text('按人格设置绑定关系、发送频率、情绪偏好和提示词'),
                   onTap: () => Navigator.push(
                     context,
                     FastRoute(
-                      builder: (_) => const PersonaStickerBindingPage(),
+                      builder: (_) => const StickerPersonaManagerPage(),
                     ),
                   ),
                 ),
@@ -79,6 +77,667 @@ class StickerManagementPage extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class StickerPersonaManagerPage extends StatelessWidget {
+  const StickerPersonaManagerPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    return Scaffold(
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar.large(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text('表情包管理器', style: largeAppBarTitleStyle(context)),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Text(
+                '为不同人格设置各自的发送频率、喜欢的情绪分组和表达偏好。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  height: 1.45,
+                ),
+              ),
+            ),
+          ),
+          if (state.personas.isNotEmpty)
+            SliverToBoxAdapter(child: _StickerManagerSummaryCard(state: state)),
+          if (state.personas.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: _StickerEmptyState(
+                icon: Icons.person_outline,
+                title: '还没有人格',
+                description: '创建人格后，就可以单独配置它的表情包行为。',
+                actionLabel: null,
+                onAction: null,
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _PersonaStickerSettingsTile(
+                      persona: state.personas[index],
+                    ),
+                  ),
+                  childCount: state.personas.length,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StickerManagerSummaryCard extends StatelessWidget {
+  final AppState state;
+
+  const _StickerManagerSummaryCard({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final configuredCount = state.personas
+        .where(
+          (persona) => state.personaStickerSettings.any(
+            (settings) => settings.personaId == persona.id,
+          ),
+        )
+        .length;
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: cs.primaryContainer.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(AppTheme.radiusLg),
+        border: Border.all(color: cs.primary.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.tune_rounded, color: cs.primary, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Wrap(
+              spacing: 18,
+              runSpacing: 8,
+              children: [
+                _StickerManagerMetric(
+                  label: '人格',
+                  value: state.personas.length,
+                ),
+                _StickerManagerMetric(label: '已配置', value: configuredCount),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StickerManagerMetric extends StatelessWidget {
+  final String label;
+  final int value;
+
+  const _StickerManagerMetric({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '$value',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PersonaStickerSettingsTile extends StatelessWidget {
+  final Persona persona;
+
+  const _PersonaStickerSettingsTile({required this.persona});
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final settings = state.personaStickerSettingsFor(persona.id);
+    final groups = state.stickerGroupsForPersona(persona.id);
+    final folders = state.stickerFoldersForPersona(persona.id);
+    final selectedCount = settings.preferredFolderIds.isEmpty
+        ? folders.length
+        : settings.preferredFolderIds
+              .where((id) => folders.any((folder) => folder.id == id))
+              .length;
+    final groupCount = state.stickerGroupsForPersona(persona.id).length;
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          FastRoute(
+            builder: (_) => PersonaStickerSettingsPage(personaId: persona.id),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  PersonaAvatar(persona: persona, radius: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          persona.name,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          groupCount == 0 ? '未绑定表情包组' : '$groupCount 个表情包组',
+                          style: TextStyle(
+                            color: groupCount == 0
+                                ? Theme.of(context).colorScheme.outline
+                                : Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right_rounded),
+                ],
+              ),
+              if (groups.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final group in groups)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Chip(
+                            avatar: _StickerMiniThumbnail(
+                              filePath: _stickerPathForGroup(state, group.id),
+                              fallbackIcon: Icons.collections_bookmark_outlined,
+                            ),
+                            label: Text(group.name),
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(
+                    Icons.emoji_emotions_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.tertiary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '偏好 $selectedCount 个情绪分组',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PersonaStickerSettingsPage extends StatefulWidget {
+  final String personaId;
+
+  const PersonaStickerSettingsPage({super.key, required this.personaId});
+
+  @override
+  State<PersonaStickerSettingsPage> createState() =>
+      _PersonaStickerSettingsPageState();
+}
+
+class _PersonaStickerSettingsPageState
+    extends State<PersonaStickerSettingsPage> {
+  late int _probability;
+  late Set<String> _selectedGroupIds;
+  late Set<String> _selectedFolderIds;
+  late final TextEditingController _promptController;
+
+  @override
+  void initState() {
+    super.initState();
+    final settings = context.read<AppState>().personaStickerSettingsFor(
+      widget.personaId,
+    );
+    _probability = settings.sendProbability;
+    _selectedGroupIds = context
+        .read<AppState>()
+        .stickerGroupsForPersona(widget.personaId)
+        .map((group) => group.id)
+        .toSet();
+    _selectedFolderIds = settings.preferredFolderIds.toSet();
+    _promptController = TextEditingController(text: settings.customPrompt);
+  }
+
+  @override
+  void dispose() {
+    _promptController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final persona = state.personaById(widget.personaId);
+    if (persona == null) {
+      return const Scaffold(body: SizedBox.shrink());
+    }
+    final groups = state.stickerGroups;
+    final validGroupIds = groups.map((group) => group.id).toSet();
+    _selectedGroupIds = _selectedGroupIds.intersection(validGroupIds);
+    final folders = state.stickerFolders
+        .where((folder) => _selectedGroupIds.contains(folder.groupId))
+        .toList();
+    final validFolderIds = folders.map((folder) => folder.id).toSet();
+    _selectedFolderIds = _selectedFolderIds.intersection(validFolderIds);
+    final cs = Theme.of(context).colorScheme;
+    final streamEnabled = state.streamOutputEnabled;
+
+    return Scaffold(
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar.large(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text(persona.name, style: largeAppBarTitleStyle(context)),
+          ),
+          SliverToBoxAdapter(
+            child: streamEnabled
+                ? Container(
+                    margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: cs.errorContainer.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: cs.error.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          color: cs.error,
+                          size: 22,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '当前已开启流式输出。表情包发送和流式输出互斥，关闭流式输出后才能编辑和发送表情包。',
+                            style: TextStyle(
+                              color: cs.onErrorContainer,
+                              fontSize: 13,
+                              height: 1.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+          SliverToBoxAdapter(
+            child: Opacity(
+              opacity: streamEnabled ? 0.52 : 1,
+              child: IgnorePointer(
+                ignoring: streamEnabled,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Card(
+                        child: Column(
+                          children: [
+                            ListTile(
+                              leading: PersonaAvatar(
+                                persona: persona,
+                                radius: 22,
+                              ),
+                              title: const Text('发送频率'),
+                              subtitle: const Text('每次非流式回复尝试使用表情包的概率'),
+                              trailing: Text(
+                                '$_probability%',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(
+                                      color: cs.primary,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                              child: Slider(
+                                value: _probability.toDouble(),
+                                min: 0,
+                                max: 100,
+                                divisions: 100,
+                                label: '$_probability%',
+                                onChanged: streamEnabled
+                                    ? null
+                                    : (value) => setState(
+                                        () => _probability = value.round(),
+                                      ),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    Icons.info_outline,
+                                    size: 17,
+                                    color: cs.outline,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      stickerFrequencyHelpText(),
+                                      style: TextStyle(
+                                        color: cs.outline,
+                                        fontSize: 12,
+                                        height: 1.45,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '绑定的表情包组',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '只有绑定的表情包组及其情绪分组可以被这个人格使用。',
+                                style: TextStyle(color: cs.onSurfaceVariant),
+                              ),
+                              const SizedBox(height: 14),
+                              if (groups.isEmpty)
+                                Text(
+                                  '还没有可绑定的表情包组，请先创建表情包组。',
+                                  style: TextStyle(color: cs.outline),
+                                )
+                              else
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    for (final group in groups)
+                                      FilterChip(
+                                        avatar: _StickerMiniThumbnail(
+                                          filePath: _stickerPathForGroup(
+                                            state,
+                                            group.id,
+                                          ),
+                                          fallbackIcon: Icons
+                                              .collections_bookmark_outlined,
+                                        ),
+                                        label: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(group.name),
+                                            if (_selectedGroupIds.contains(
+                                              group.id,
+                                            ))
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  left: 5,
+                                                ),
+                                                child: Icon(
+                                                  Icons.check_rounded,
+                                                  size: 16,
+                                                  color: cs.primary,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        showCheckmark: false,
+                                        selected: _selectedGroupIds.contains(
+                                          group.id,
+                                        ),
+                                        onSelected: streamEnabled
+                                            ? null
+                                            : (selected) => setState(() {
+                                                if (selected) {
+                                                  _selectedGroupIds.add(
+                                                    group.id,
+                                                  );
+                                                } else {
+                                                  _selectedGroupIds.remove(
+                                                    group.id,
+                                                  );
+                                                }
+                                              }),
+                                      ),
+                                  ],
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '喜欢的情绪分组',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '不选择时使用该人格已绑定表情包组中的全部情绪分组。',
+                                style: TextStyle(color: cs.onSurfaceVariant),
+                              ),
+                              const SizedBox(height: 14),
+                              if (folders.isEmpty)
+                                Text(
+                                  '当前人格还没有绑定可用的表情包组。',
+                                  style: TextStyle(color: cs.outline),
+                                )
+                              else
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    for (final folder in folders)
+                                      FilterChip(
+                                        avatar: _StickerMiniThumbnail(
+                                          filePath: _stickerPathForFolder(
+                                            state,
+                                            folder.id,
+                                          ),
+                                          fallbackIcon: Icons.folder_outlined,
+                                        ),
+                                        label: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(folder.name),
+                                            if (_selectedFolderIds.contains(
+                                              folder.id,
+                                            ))
+                                              Padding(
+                                                padding: const EdgeInsets.only(
+                                                  left: 5,
+                                                ),
+                                                child: Icon(
+                                                  Icons.check_rounded,
+                                                  size: 16,
+                                                  color: cs.primary,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        showCheckmark: false,
+                                        selected: _selectedFolderIds.contains(
+                                          folder.id,
+                                        ),
+                                        onSelected: streamEnabled
+                                            ? null
+                                            : (selected) => setState(() {
+                                                if (selected) {
+                                                  _selectedFolderIds.add(
+                                                    folder.id,
+                                                  );
+                                                } else {
+                                                  _selectedFolderIds.remove(
+                                                    folder.id,
+                                                  );
+                                                }
+                                              }),
+                                      ),
+                                  ],
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '表情使用策略',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                stickerPreferenceHelpText(),
+                                style: TextStyle(color: cs.onSurfaceVariant),
+                              ),
+                              const SizedBox(height: 12),
+                              TextField(
+                                controller: _promptController,
+                                enabled: !streamEnabled,
+                                minLines: 4,
+                                maxLines: 8,
+                                maxLength: 1000,
+                                decoration: const InputDecoration(
+                                  labelText: '自定义表情偏好',
+                                  hintText:
+                                      '例如：被夸奖时优先使用“开心”；讨论严肃问题时不要发送；整体保持可爱但不要连续发送。',
+                                  alignLabelWithHint: true,
+                                  border: InputBorder.none,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: streamEnabled ? null : () => _save(context),
+        icon: const Icon(Icons.check_rounded),
+        label: const Text('保存设置'),
+      ),
+    );
+  }
+
+  Future<void> _save(BuildContext context) async {
+    final state = context.read<AppState>();
+    final validFolderIds = state.stickerFolders
+        .where((folder) => _selectedGroupIds.contains(folder.groupId))
+        .map((folder) => folder.id)
+        .toSet();
+    await state.setPersonaStickerGroups(
+      personaId: widget.personaId,
+      groupIds: _selectedGroupIds,
+    );
+    await state.setPersonaStickerSettings(
+      PersonaStickerSettings(
+        personaId: widget.personaId,
+        sendProbability: _probability,
+        preferredFolderIds: _selectedFolderIds
+            .intersection(validFolderIds)
+            .toList(),
+        customPrompt: _promptController.text,
+      ),
+    );
+    if (context.mounted) Navigator.pop(context);
   }
 }
 
@@ -345,6 +1004,43 @@ class _StickerEmptyState extends StatelessWidget {
           ],
         ],
       ),
+    ),
+  );
+}
+
+String? _stickerPathForGroup(AppState state, String groupId) {
+  return state
+      .stickerFoldersForGroup(groupId)
+      .expand((folder) => state.stickersForFolder(folder.id))
+      .map((sticker) => sticker.filePath.trim())
+      .where((path) => path.isNotEmpty)
+      .firstOrNull;
+}
+
+String? _stickerPathForFolder(AppState state, String folderId) {
+  return state
+      .stickersForFolder(folderId)
+      .map((sticker) => sticker.filePath.trim())
+      .where((path) => path.isNotEmpty)
+      .firstOrNull;
+}
+
+class _StickerMiniThumbnail extends StatelessWidget {
+  final String? filePath;
+  final IconData fallbackIcon;
+
+  const _StickerMiniThumbnail({
+    required this.filePath,
+    required this.fallbackIcon,
+  });
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 24,
+    height: 24,
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(7),
+      child: _StickerThumbnail(filePath: filePath, fallbackIcon: fallbackIcon),
     ),
   );
 }
@@ -872,7 +1568,7 @@ class PersonaStickerBindingPage extends StatelessWidget {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setState) => AlertDialog(
-          title: Text('选择表情包组（已选 ${selected.length} 个）'),
+          title: Text('选择表情包组'),
           content: SizedBox(
             width: 360,
             child: ListView(

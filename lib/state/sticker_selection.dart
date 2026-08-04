@@ -14,6 +14,7 @@ class StickerSelection {
     required List<StickerFolder> stickerFolders,
     required List<StickerItem> stickers,
     required List<PersonaStickerBinding> bindings,
+    Set<String>? allowedFolderIds,
   }) {
     final id = personaId?.trim() ?? '';
     final name = folderName.trim();
@@ -31,7 +32,11 @@ class StickerSelection {
 
     final folderIds = stickerFolders
         .where(
-          (folder) => groupIds.contains(folder.groupId) && folder.name == name,
+          (folder) =>
+              groupIds.contains(folder.groupId) &&
+              folder.name == name &&
+              (allowedFolderIds == null ||
+                  allowedFolderIds.contains(folder.id)),
         )
         .map((folder) => folder.id)
         .toSet();

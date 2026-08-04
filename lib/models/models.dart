@@ -478,6 +478,51 @@ class PersonaStickerBinding {
       );
 }
 
+class PersonaStickerSettings {
+  final String personaId;
+  int sendProbability;
+  List<String> preferredFolderIds;
+  String customPrompt;
+
+  PersonaStickerSettings({
+    required this.personaId,
+    this.sendProbability = 10,
+    List<String>? preferredFolderIds,
+    this.customPrompt = '',
+  }) : preferredFolderIds = List<String>.from(preferredFolderIds ?? const []);
+
+  PersonaStickerSettings copyWith({
+    int? sendProbability,
+    List<String>? preferredFolderIds,
+    String? customPrompt,
+  }) {
+    return PersonaStickerSettings(
+      personaId: personaId,
+      sendProbability: sendProbability ?? this.sendProbability,
+      preferredFolderIds: preferredFolderIds ?? this.preferredFolderIds,
+      customPrompt: customPrompt ?? this.customPrompt,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'personaId': personaId,
+    'sendProbability': sendProbability,
+    'preferredFolderIds': preferredFolderIds,
+    'customPrompt': customPrompt,
+  };
+
+  factory PersonaStickerSettings.fromJson(Map<String, dynamic> json) {
+    return PersonaStickerSettings(
+      personaId: json['personaId'] as String,
+      sendProbability: (json['sendProbability'] as num?)?.toInt() ?? 10,
+      preferredFolderIds: List<String>.from(
+        json['preferredFolderIds'] as List? ?? const [],
+      ),
+      customPrompt: json['customPrompt'] as String? ?? '',
+    );
+  }
+}
+
 /// 聊天消息
 class ChatMessage {
   final String id;

@@ -39,7 +39,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
   });
 
-  testWidgets('设置页提供表情包发送频率入口', (tester) async {
+  testWidgets('设置页将表情包资源与人格偏好统一放入表情包页面', (tester) async {
     final state = AppState(StorageService());
     addTearDown(state.dispose);
 
@@ -53,6 +53,7 @@ void main() {
       ),
     );
 
-    expect(find.text('表情包发送频率'), findsOneWidget);
+    expect(find.text('表情包'), findsOneWidget);
+    expect(find.text('表情包发送频率'), findsNothing);
   });
 }
