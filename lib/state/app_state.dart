@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:collection';
 
+import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart'
     show AppLifecycleState, ThemeMode, WidgetsBinding, WidgetsBindingObserver;
@@ -12,6 +13,7 @@ import 'package:uuid/uuid.dart';
 import '../models/models.dart';
 import '../services/ai_service.dart';
 import '../services/logger_service.dart';
+import '../services/segmented_delivery_scheduler.dart';
 import '../services/segmented_splitter.dart';
 import '../services/storage_service.dart';
 import '../services/sticker_storage_service.dart';
@@ -115,8 +117,13 @@ String buildStickerPromptSection({
 /// 全局应用状态
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final StorageService _storage;
+  final SegmentedDeliveryScheduler _segmentedDeliveryScheduler;
 
-  AppState(this._storage) {
+  AppState(
+    this._storage, {
+    SegmentedDeliveryScheduler? segmentedDeliveryScheduler,
+  }) : _segmentedDeliveryScheduler =
+           segmentedDeliveryScheduler ?? SegmentedDeliveryScheduler() {
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -164,7 +171,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _pendingReplies.clear();
     _pendingMergedSessionId = null;
     cancelPendingMerge();
-    _cancelSegmentedTimer();
+    _segmentedDeliveryScheduler.cancelAll();
+    _cancelSegmentedVisualTimers();
     for (final session in sessions) {
       for (final message in session.messages) {
         if (message.isStreaming || message.isSegmented) {
@@ -185,11 +193,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _idleTimer?.cancel();
     _mergeTimer?.cancel();
-    _segmentedTimer?.cancel();
-    for (final timer in _segmentVisualTimers) {
-      timer.cancel();
-    }
-    _segmentVisualTimers.clear();
+    _segmentedDeliveryScheduler.dispose();
+    _cancelSegmentedVisualTimers();
     _sessionsPersistTimer?.cancel();
     _memoriesPersistTimer?.cancel();
     _tokenPersistTimer?.cancel();
@@ -295,7 +300,18 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   bool typingDebounceEnabled = false; // 打字时推迟回复
 
   // 流式输出（默认开启；与对话分段发送互斥，关闭流式后才能启用分段发送）
-  bool streamOutputEnabled = true;
+  AssistantOutputMode assistantOutputMode = AssistantOutputMode.streaming;
+
+  bool get streamOutputEnabled =>
+      assistantOutputMode == AssistantOutputMode.streaming;
+
+  set streamOutputEnabled(bool value) {
+    assistantOutputMode = value
+        ? AssistantOutputMode.streaming
+        : AssistantOutputMode.complete;
+    segmentedSendSettings = segmentedSendSettings.copyWith(enabled: false);
+  }
+
   StickerSendMode stickerSendMode = StickerSendMode.low;
   int get stickerSendProbability => stickerSendMode.gateProbability;
 
@@ -369,29 +385,36 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> setSegmentedSendSettings(SegmentedSendSettings v) async {
-    final next = v.copyWith(
-      linearCharFactor: v.linearCharFactor.clamp(0.0, 0.3),
-      maxProcessLength: v.maxProcessLength.clamp(0, 50000),
-    );
-    // 启用分段发送时，必须先关闭流式输出
-    if (next.enabled && streamOutputEnabled) {
-      streamOutputEnabled = false;
-      await _storage.setStreamOutputEnabled(false);
-    }
+    final next = v.normalized();
     segmentedSendSettings = next;
     await _storage.saveSegmentedSendSettings(next);
+    if (next.enabled && assistantOutputMode != AssistantOutputMode.segmented) {
+      await setAssistantOutputMode(AssistantOutputMode.segmented);
+    } else if (!next.enabled &&
+        assistantOutputMode == AssistantOutputMode.segmented) {
+      await setAssistantOutputMode(AssistantOutputMode.complete);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setAssistantOutputMode(AssistantOutputMode mode) async {
+    assistantOutputMode = mode;
+    segmentedSendSettings = segmentedSendSettings.copyWith(
+      enabled: mode == AssistantOutputMode.segmented,
+    );
+    await _storage.setAssistantOutputMode(mode);
+    // 同步保留旧键，便于旧版本继续读取到一致的互斥状态。
+    await _storage.setStreamOutputEnabled(
+      mode == AssistantOutputMode.streaming,
+    );
+    await _storage.saveSegmentedSendSettings(segmentedSendSettings);
     notifyListeners();
   }
 
   Future<void> setStreamOutputEnabled(bool v) async {
-    // 启用流式输出时，必须先关闭分段发送
-    if (v && segmentedSendSettings.enabled) {
-      segmentedSendSettings = segmentedSendSettings.copyWith(enabled: false);
-      await _storage.saveSegmentedSendSettings(segmentedSendSettings);
-    }
-    streamOutputEnabled = v;
-    await _storage.setStreamOutputEnabled(v);
-    notifyListeners();
+    await setAssistantOutputMode(
+      v ? AssistantOutputMode.streaming : AssistantOutputMode.complete,
+    );
   }
 
   Future<void> setStickerSendMode(StickerSendMode mode) async {
@@ -1232,9 +1255,17 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     messageMergeEnabled = _storage.messageMergeEnabled;
     messageMergeDebounce = _storage.messageMergeDebounce;
     typingDebounceEnabled = _storage.typingDebounceEnabled;
-    streamOutputEnabled = _storage.streamOutputEnabled;
     stickerSendMode = _storage.stickerSendMode;
-    segmentedSendSettings = _storage.loadSegmentedSendSettings();
+    segmentedSendSettings = _storage.loadSegmentedSendSettings().normalized();
+    assistantOutputMode = _storage.loadAssistantOutputMode();
+    segmentedSendSettings = segmentedSendSettings.copyWith(
+      enabled: assistantOutputMode == AssistantOutputMode.segmented,
+    );
+    await _storage.setAssistantOutputMode(assistantOutputMode);
+    await _storage.setStreamOutputEnabled(
+      assistantOutputMode == AssistantOutputMode.streaming,
+    );
+    await _storage.saveSegmentedSendSettings(segmentedSendSettings);
     memorySettings = _storage.loadMemorySettings();
     tokenUsage = _storage.loadTokenUsage();
     final dailyRecords = _storage.loadTokenDailyRecords();
@@ -1549,6 +1580,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> deleteSession(String id) async {
+    _segmentedDeliveryScheduler.cancelSession(id);
     final title = sessions.where((s) => s.id == id).firstOrNull?.title ?? id;
     sessions.removeWhere((s) => s.id == id);
     if (currentSessionId == id) currentSessionId = null;
@@ -1558,6 +1590,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> clearSessions() async {
+    _segmentedDeliveryScheduler.cancelAll();
     final count = sessions.length;
     sessions.clear();
     currentSessionId = null;
@@ -1588,6 +1621,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final group = isGroup ? groupOf(session) : null;
     final persona = isGroup ? null : (personaOf(session) ?? activePersona);
     final mentions = mentionedPersonaIds ?? const <String>[];
+
+    // 同一会话在旧回复的分段仍在等待时，先把旧批次立即补齐，
+    // 再追加用户消息，避免出现“旧回复后半段插到新用户消息之后”。
+    if (_segmentedDeliveryScheduler.isActive(session.id)) {
+      _segmentedDeliveryScheduler.flushSession(session.id);
+      await _segmentedDeliveryScheduler.whenIdle(session.id);
+    }
 
     log.d(
       'chat',
@@ -2006,6 +2046,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     required String text,
     required List<String> mentions,
   }) async {
+    final outputMode = assistantOutputMode;
+    final segmentedSettings = segmentedSendSettings.normalized();
     final systemPrompt = _buildSystemPrompt(
       isGroup: isGroup,
       group: group,
@@ -2018,6 +2060,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       session: session,
       systemPrompt: systemPrompt,
       isGroup: isGroup,
+      segmentedSettings: segmentedSettings,
     );
 
     if (injectMemories && embeddingApiConfig.isValid) {
@@ -2037,6 +2080,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       tools: tools,
       speaker: speaker,
       persona: persona,
+      outputMode: outputMode,
+      segmentedSettings: segmentedSettings,
     );
   }
 
@@ -2120,6 +2165,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     required ChatSession session,
     required String systemPrompt,
     required bool isGroup,
+    required SegmentedSendSettings segmentedSettings,
   }) {
     return <Map<String, dynamic>>[
       {'role': 'system', 'content': systemPrompt},
@@ -2133,11 +2179,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
             return {'role': 'assistant', 'content': '[${sp.name}] $cleaned'};
           }
         }
-        if (m.role == 'user' && segmentedSendSettings.reverseReplace) {
+        if (m.role == 'user' && segmentedSettings.reverseReplace) {
           // 反向替换用户消息：UI 显示原文，发给 AI 的为还原后内容
           final restored = SegmentedSplitter.applyReverseReplace(
             m.content,
-            segmentedSendSettings,
+            segmentedSettings,
           );
           final cleaned = stripStickerInternalMarkers(restored);
           if (cleaned.isEmpty && cleaned != restored.trim()) return null;
@@ -2213,6 +2259,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     required List<ToolConfig> tools,
     required Persona? speaker,
     required Persona? persona,
+    required AssistantOutputMode outputMode,
+    required SegmentedSendSettings segmentedSettings,
   }) async {
     for (var round = 0; round < 5; round++) {
       if (_cancelToken?.isCancelled == true) throw const _CancelException();
@@ -2234,7 +2282,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         onDelta: (delta) {
           // 流式输出开启时实时追加显示；关闭时仅保留 loading 占位，
           // 整段在 _finalizeAssistantMessage/_applySegmentedSend 中一次性写入
-          if (streamOutputEnabled) {
+          if (outputMode == AssistantOutputMode.streaming) {
             streamingMsg.content += delta;
             _scheduleStreamNotify();
           }
@@ -2263,7 +2311,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       streamingMsg.isStreaming = false;
 
       if (resp.toolCalls.isEmpty) {
-        _finalizeAssistantMessage(session, streamingMsg, resp.content, speaker);
+        await _finalizeAssistantMessage(
+          session,
+          streamingMsg,
+          resp.content,
+          speaker,
+          outputMode: outputMode,
+          segmentedSettings: segmentedSettings,
+        );
         break;
       }
 
@@ -2288,16 +2343,20 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  void _finalizeAssistantMessage(
+  Future<void> _finalizeAssistantMessage(
     ChatSession session,
     ChatMessage? streamingMsg,
     String? finalContent,
-    Persona? speaker,
-  ) {
+    Persona? speaker, {
+    required AssistantOutputMode outputMode,
+    required SegmentedSendSettings segmentedSettings,
+  }) async {
     final content = finalContent ?? streamingMsg?.content ?? '';
     final parts = _buildAssistantParts(
       content,
       speaker?.id ?? session.personaId,
+      outputMode: outputMode,
+      segmentedSettings: segmentedSettings,
     );
     if (parts.isEmpty) {
       if (streamingMsg != null) session.messages.remove(streamingMsg);
@@ -2318,11 +2377,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
       return;
     }
-    if (segmentedSendSettings.enabled) {
-      _enqueueAssistantParts(
+    if (outputMode == AssistantOutputMode.segmented) {
+      await _deliverAssistantParts(
         session: session,
         speaker: speaker,
         remaining: parts.sublist(1),
+        settings: segmentedSettings,
       );
     } else {
       for (final part in parts.skip(1)) {
@@ -2338,13 +2398,18 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     caseSensitive: false,
   );
 
-  List<_AssistantPart> _buildAssistantParts(String content, String? personaId) {
+  List<_AssistantPart> _buildAssistantParts(
+    String content,
+    String? personaId, {
+    required AssistantOutputMode outputMode,
+    required SegmentedSendSettings segmentedSettings,
+  }) {
     final parsed = <_AssistantPart>[];
     var start = 0;
     var stickerCount = 0;
     final stickerSettings = personaStickerSettingsFor(personaId);
     final canUseStickers =
-        stickersEnabled &&
+        outputMode != AssistantOutputMode.streaming &&
         StickerSelection.allowsStickerForMode(
           mode: stickerSettings.sendMode,
           random: _stickerRandom,
@@ -2364,18 +2429,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     final tail = content.substring(start).trim();
     if (tail.isNotEmpty) parsed.add(_AssistantPart.text(tail));
-    if (!segmentedSendSettings.enabled) return parsed;
+    if (outputMode != AssistantOutputMode.segmented) return parsed;
     final expanded = <_AssistantPart>[];
     for (final part in parsed) {
       if (part.stickerId != null ||
-          part.text.length < segmentedSendSettings.minTriggerLength) {
+          part.text.characters.length < segmentedSettings.minTriggerLength) {
         expanded.add(part);
         continue;
       }
-      final segments = SegmentedSplitter.split(
-        part.text,
-        segmentedSendSettings,
-      );
+      final segments = SegmentedSplitter.split(part.text, segmentedSettings);
       expanded.addAll(
         segments.where((text) => text.isNotEmpty).map(_AssistantPart.text),
       );
@@ -2401,53 +2463,54 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return message;
   }
 
-  void _enqueueAssistantParts({
+  Future<void> _deliverAssistantParts({
     required ChatSession session,
     required Persona? speaker,
     required List<_AssistantPart> remaining,
-  }) {
+    required SegmentedSendSettings settings,
+  }) async {
     if (remaining.isEmpty) {
       _scheduleSessionsPersist();
       notifyListeners();
       return;
     }
-    final next = remaining.first;
-    final delay = next.stickerId != null
-        ? const Duration(milliseconds: 450)
-        : SegmentedSplitter.segmentDelay(
-            segmentChars: next.text.length,
-            s: segmentedSendSettings,
-          );
-    _segmentedTimer = Timer(delay, () {
-      _segmentedTimer = null;
-      final message = _appendAssistantPart(
-        session,
-        next,
-        speaker,
-        segmented: true,
-      );
-      notifyListeners();
-      _scheduleSessionsPersist();
-      late final Timer visualTimer;
-      visualTimer = Timer(const Duration(milliseconds: 330), () {
-        _segmentVisualTimers.remove(visualTimer);
-        message.isSegmented = false;
+    final delays = [
+      for (final part in remaining)
+        part.stickerId != null
+            ? const Duration(milliseconds: 450)
+            : SegmentedSplitter.segmentDelay(
+                segmentChars: part.text.characters.length,
+                s: settings,
+              ),
+    ];
+    await _segmentedDeliveryScheduler.deliver(
+      sessionId: session.id,
+      itemCount: remaining.length,
+      delayFor: (index) => delays[index],
+      onDeliver: (index) {
+        final message = _appendAssistantPart(
+          session,
+          remaining[index],
+          speaker,
+          segmented: true,
+        );
         notifyListeners();
-      });
-      _segmentVisualTimers.add(visualTimer);
-      _enqueueAssistantParts(
-        session: session,
-        speaker: speaker,
-        remaining: remaining.sublist(1),
-      );
-    });
+        _scheduleSessionsPersist();
+        late final Timer visualTimer;
+        visualTimer = Timer(const Duration(milliseconds: 330), () {
+          _segmentVisualTimers.remove(visualTimer);
+          message.isSegmented = false;
+          notifyListeners();
+        });
+        _segmentVisualTimers.add(visualTimer);
+      },
+    );
+    // 最后一段的回调发生在 scheduler 移除批次之前，再补一次通知，
+    // 让聊天页及时收起进度条。
+    if (hasListeners) notifyListeners();
   }
 
-  Timer? _segmentedTimer;
-
-  void _cancelSegmentedTimer() {
-    _segmentedTimer?.cancel();
-    _segmentedTimer = null;
+  void _cancelSegmentedVisualTimers() {
     for (final timer in _segmentVisualTimers) {
       timer.cancel();
     }

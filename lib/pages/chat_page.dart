@@ -107,6 +107,7 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
+  AppState? _appState;
   final _input = TextEditingController();
   final _scroll = ScrollController();
   final _focusNode = FocusNode();
@@ -137,6 +138,12 @@ class _ChatPageState extends State<ChatPage> {
     super.initState();
     _input.addListener(_onTextChanged);
     _scroll.addListener(_onScrollChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _appState ??= context.read<AppState>();
   }
 
   void _onScrollChanged() {
@@ -284,7 +291,7 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void dispose() {
     // 退出当前聊天界面时，恢复打字防抖倒计时结算
-    context.read<AppState>().resumeMergeTimerForTyping();
+    _appState?.resumeMergeTimerForTyping();
     _input.dispose();
     _scroll.removeListener(_onScrollChanged);
     _scroll.dispose();

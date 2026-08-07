@@ -105,7 +105,8 @@ class SegmentedSendSettingsPage extends StatelessWidget {
                   icon: Icons.format_align_left,
                   iconColor: cs.tertiary,
                   title: '最长处理字数',
-                  subtitle: '回复超过 ${s.maxProcessLength} 字时截断后再分段（0 = 不限制）',
+                  subtitle:
+                      '回复超过 ${s.maxProcessLength} 字时保留整段，避免截断（0 = 不设业务上限）',
                   trailing: _ValueLabel(
                     s.maxProcessLength == 0 ? '不限制' : '${s.maxProcessLength} 字',
                     e,

@@ -768,12 +768,15 @@ class TokenUsage {
   );
 }
 
+/// 助手回复的显示模式。
+enum AssistantOutputMode { streaming, complete, segmented }
+
 /// 对话分段发送设置：将 AI 长文本智能切分为多段短消息，并按线性延迟逐段追加
 class SegmentedSendSettings {
   // 基础设置
   bool enabled; // 是否启用分段发送
   int minTriggerLength; // 最短触发字数（短于此不分段）
-  int maxProcessLength; // 最长处理字数（超出截断或不再追加段）
+  int maxProcessLength; // 最长分段处理字数（超出时保留整段，避免截断）
 
   // 均分算法
   int maxSegments; // 最大段数
@@ -783,8 +786,8 @@ class SegmentedSendSettings {
   bool trimBlankLines; // 清理每段首尾空行（不影响段内换行）
 
   // 线性延迟算法：延迟(秒) = linearBase + 字数 * linearCharFactor
-  double linearBase; // 默认 0.5
-  double linearCharFactor; // 默认 0.1
+  double linearBase; // 默认 0.8
+  double linearCharFactor; // 默认 0.09
 
   // 文本清理
   String preCleanRegex; // 前置清理正则
@@ -826,28 +829,101 @@ class SegmentedSendSettings {
     'reverseReplace': reverseReplace,
   };
 
-  factory SegmentedSendSettings.fromJson(
+  factory SegmentedSendSettings.fromJson(Map<String, dynamic> json) {
+    final rawRules = json['replaceRules'];
+    final rules = rawRules is List
+        ? rawRules
+              .whereType<Map>()
+              .map(
+                (e) =>
+                    SegmentedReplaceRule.fromJson(Map<String, dynamic>.from(e)),
+              )
+              .toList()
+        : const <SegmentedReplaceRule>[];
+    return SegmentedSendSettings(
+      enabled: _readBool(json, 'enabled', false),
+      minTriggerLength: _readInt(json, 'minTriggerLength', 20),
+      maxProcessLength: _readInt(json, 'maxProcessLength', 500).clamp(0, 50000),
+      maxSegments: _readInt(json, 'maxSegments', 5),
+      minSegmentLength: _readInt(json, 'minSegmentLength', 35),
+      balanceLowerRatio: _readDouble(json, 'balanceLowerRatio', 0.4),
+      balanceUpperRatio: _readDouble(json, 'balanceUpperRatio', 0.9),
+      trimBlankLines: _readBool(json, 'trimBlankLines', true),
+      linearBase: _readDouble(json, 'linearBase', 0.8),
+      linearCharFactor: _readDouble(
+        json,
+        'linearCharFactor',
+        0.09,
+      ).clamp(0.0, 0.3),
+      preCleanRegex: _readString(json, 'preCleanRegex'),
+      postCleanRegex: _readString(json, 'postCleanRegex'),
+      replaceRules: rules,
+      reverseReplace: _readBool(json, 'reverseReplace', false),
+    ).normalized();
+  }
+
+  /// 将配置限制在分段算法可以安全处理的范围内。
+  ///
+  /// 设置可能来自旧版本持久化数据、手动编辑的配置或 UI 外部调用，
+  /// 因此不能假设数值一定有效。这里统一做边界校验，并保证上下比例
+  /// 不会出现 lower > upper 的矛盾状态。
+  SegmentedSendSettings normalized() {
+    int boundedInt(int value, int min, int max) => value.clamp(min, max);
+
+    double boundedDouble(
+      double value,
+      double fallback,
+      double min,
+      double max,
+    ) {
+      if (!value.isFinite) return fallback;
+      return value.clamp(min, max).toDouble();
+    }
+
+    final lower = boundedDouble(balanceLowerRatio, 0.4, 0.0, 0.99);
+    final upper = boundedDouble(balanceUpperRatio, 0.9, lower, 1.0);
+    return copyWith(
+      minTriggerLength: boundedInt(minTriggerLength, 1, 50000),
+      maxProcessLength: boundedInt(maxProcessLength, 0, 50000),
+      maxSegments: boundedInt(maxSegments, 1, 50),
+      minSegmentLength: boundedInt(minSegmentLength, 1, 5000),
+      balanceLowerRatio: lower,
+      balanceUpperRatio: upper,
+      linearBase: boundedDouble(linearBase, 0.8, 0.0, 30.0),
+      linearCharFactor: boundedDouble(linearCharFactor, 0.09, 0.0, 0.3),
+    );
+  }
+
+  static int _readInt(Map<String, dynamic> json, String key, int fallback) {
+    final value = json[key];
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? fallback;
+  }
+
+  static double _readDouble(
     Map<String, dynamic> json,
-  ) => SegmentedSendSettings(
-    enabled: json['enabled'] ?? false,
-    minTriggerLength: json['minTriggerLength'] ?? 20,
-    maxProcessLength: ((json['maxProcessLength'] as num?)?.toInt() ?? 500)
-        .clamp(0, 50000),
-    maxSegments: json['maxSegments'] ?? 5,
-    minSegmentLength: json['minSegmentLength'] ?? 35,
-    balanceLowerRatio: (json['balanceLowerRatio'] as num?)?.toDouble() ?? 0.4,
-    balanceUpperRatio: (json['balanceUpperRatio'] as num?)?.toDouble() ?? 0.9,
-    trimBlankLines: json['trimBlankLines'] ?? true,
-    linearBase: (json['linearBase'] as num?)?.toDouble() ?? 0.5,
-    linearCharFactor: ((json['linearCharFactor'] as num?)?.toDouble() ?? 0.07)
-        .clamp(0.0, 0.3),
-    preCleanRegex: json['preCleanRegex'] ?? '',
-    postCleanRegex: json['postCleanRegex'] ?? '',
-    replaceRules: ((json['replaceRules'] ?? []) as List)
-        .map((e) => SegmentedReplaceRule.fromJson(e as Map<String, dynamic>))
-        .toList(),
-    reverseReplace: json['reverseReplace'] ?? false,
-  );
+    String key,
+    double fallback,
+  ) {
+    final value = json[key];
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? fallback;
+  }
+
+  static bool _readBool(Map<String, dynamic> json, String key, bool fallback) {
+    final value = json[key];
+    if (value is bool) return value;
+    if (value is String) {
+      if (value.toLowerCase() == 'true') return true;
+      if (value.toLowerCase() == 'false') return false;
+    }
+    return fallback;
+  }
+
+  static String _readString(Map<String, dynamic> json, String key) {
+    final value = json[key];
+    return value is String ? value : '';
+  }
 
   SegmentedSendSettings copyWith({
     bool? enabled,
@@ -893,7 +969,7 @@ class SegmentedReplaceRule {
 
   factory SegmentedReplaceRule.fromJson(Map<String, dynamic> json) =>
       SegmentedReplaceRule(
-        find: json['find'] ?? '',
-        replace: json['replace'] ?? '',
+        find: json['find'] is String ? json['find'] as String : '',
+        replace: json['replace'] is String ? json['replace'] as String : '',
       );
 }
