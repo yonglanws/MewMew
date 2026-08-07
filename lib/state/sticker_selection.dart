@@ -65,4 +65,11 @@ class StickerSelection {
     if (percent >= 100) return true;
     return (random ?? Random()).nextInt(100) < percent;
   }
+
+  static bool allowsStickerForMode({
+    required StickerSendMode mode,
+    Random? random,
+  }) {
+    return allowsSticker(probability: mode.gateProbability, random: random);
+  }
 }

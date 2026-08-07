@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/models.dart';
 import '../state/app_state.dart';
 import '../utils/large_app_bar_title.dart';
 
@@ -11,7 +12,7 @@ class StickerSendSettingsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final cs = Theme.of(context).colorScheme;
-    final probability = state.stickerSendProbability;
+    final mode = state.stickerSendMode;
 
     return Scaffold(
       body: CustomScrollView(
@@ -21,7 +22,7 @@ class StickerSendSettingsPage extends StatelessWidget {
               icon: const Icon(Icons.arrow_back_ios_new),
               onPressed: () => Navigator.pop(context),
             ),
-            title: Text('表情包发送频率', style: largeAppBarTitleStyle(context)),
+            title: Text('表情包发送方式', style: largeAppBarTitleStyle(context)),
           ),
           SliverToBoxAdapter(
             child: Padding(
@@ -44,30 +45,23 @@ class StickerSendSettingsPage extends StatelessWidget {
                           size: 22,
                         ),
                       ),
-                      title: const Text('发送概率'),
-                      subtitle: const Text('每条回复中接受表情包标签的概率'),
-                      trailing: Text(
-                        '$probability%',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(
-                              color: cs.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
+                      title: const Text('表情包发送方式'),
+                      subtitle: const Text('人格没有单独设置时使用这里的默认方式'),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                      child: Slider(
-                        value: probability.toDouble(),
-                        min: 0,
-                        max: 100,
-                        divisions: 100,
-                        label: '$probability%',
-                        onChanged: (value) => context
-                            .read<AppState>()
-                            .setStickerSendProbability(value.round()),
+                    for (final sendMode in StickerSendMode.values)
+                      RadioListTile<StickerSendMode>(
+                        value: sendMode,
+                        groupValue: mode,
+                        title: Text(sendMode.label),
+                        subtitle: Text(sendMode.description),
+                        onChanged: (nextMode) {
+                          if (nextMode != null) {
+                            context.read<AppState>().setStickerSendMode(
+                              nextMode,
+                            );
+                          }
+                        },
                       ),
-                    ),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
                       child: Row(
@@ -77,7 +71,7 @@ class StickerSendSettingsPage extends StatelessWidget {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              '开启流式输出时不会发送表情包；关闭后该概率设置才会生效。单条回复最多发送 2 个表情包。',
+                              '${stickerSendModeHelpText()} 单条回复最多发送 2 个表情包。',
                               style: TextStyle(
                                 color: cs.outline,
                                 fontSize: 13,

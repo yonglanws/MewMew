@@ -478,27 +478,98 @@ class PersonaStickerBinding {
       );
 }
 
+enum StickerSendMode { off, low, high }
+
+extension StickerSendModeInfo on StickerSendMode {
+  String get label {
+    switch (this) {
+      case StickerSendMode.off:
+        return '不发送表情包';
+      case StickerSendMode.low:
+        return '低频率发表情包';
+      case StickerSendMode.high:
+        return '高频率发表情包';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case StickerSendMode.off:
+        return '这个人格不会发送表情包';
+      case StickerSendMode.low:
+        return '只在少数特别合适的情绪节点使用';
+      case StickerSendMode.high:
+        return '每个非流式回复至少使用 1 个表情包';
+    }
+  }
+
+  int get gateProbability {
+    switch (this) {
+      case StickerSendMode.off:
+        return 0;
+      case StickerSendMode.low:
+        return 25;
+      case StickerSendMode.high:
+        return 100;
+    }
+  }
+}
+
+StickerSendMode stickerSendModeFromLegacyProbability(int probability) {
+  final normalized = probability.clamp(0, 100).toInt();
+  if (normalized <= 0) return StickerSendMode.off;
+  if (normalized < 50) return StickerSendMode.low;
+  return StickerSendMode.high;
+}
+
+StickerSendMode stickerSendModeFromJson(Map<String, dynamic> json) {
+  final rawMode = json['sendMode'] as String?;
+  if (rawMode != null) {
+    for (final mode in StickerSendMode.values) {
+      if (mode.name == rawMode) return mode;
+    }
+  }
+  return stickerSendModeFromLegacyProbability(
+    (json['sendProbability'] as num?)?.toInt() ?? 10,
+  );
+}
+
 class PersonaStickerSettings {
   final String personaId;
-  int sendProbability;
+  StickerSendMode sendMode;
   List<String> preferredFolderIds;
   String customPrompt;
 
   PersonaStickerSettings({
     required this.personaId,
-    this.sendProbability = 10,
+    StickerSendMode? sendMode,
+    int? sendProbability,
     List<String>? preferredFolderIds,
     this.customPrompt = '',
-  }) : preferredFolderIds = List<String>.from(preferredFolderIds ?? const []);
+  }) : sendMode =
+           sendMode ??
+           stickerSendModeFromLegacyProbability(sendProbability ?? 10),
+       preferredFolderIds = List<String>.from(preferredFolderIds ?? const []);
+
+  int get sendProbability => sendMode.gateProbability;
+
+  set sendProbability(int value) {
+    sendMode = stickerSendModeFromLegacyProbability(value);
+  }
 
   PersonaStickerSettings copyWith({
+    StickerSendMode? sendMode,
     int? sendProbability,
     List<String>? preferredFolderIds,
     String? customPrompt,
   }) {
     return PersonaStickerSettings(
       personaId: personaId,
-      sendProbability: sendProbability ?? this.sendProbability,
+      sendMode:
+          sendMode ??
+          (sendProbability == null
+              ? this.sendMode
+              : stickerSendModeFromLegacyProbability(sendProbability)),
       preferredFolderIds: preferredFolderIds ?? this.preferredFolderIds,
       customPrompt: customPrompt ?? this.customPrompt,
     );
@@ -506,7 +577,9 @@ class PersonaStickerSettings {
 
   Map<String, dynamic> toJson() => {
     'personaId': personaId,
-    'sendProbability': sendProbability,
+    'sendMode': sendMode.name,
+    // Keep the legacy value so older builds can still read this setting.
+    'sendProbability': sendMode.gateProbability,
     'preferredFolderIds': preferredFolderIds,
     'customPrompt': customPrompt,
   };
@@ -514,7 +587,7 @@ class PersonaStickerSettings {
   factory PersonaStickerSettings.fromJson(Map<String, dynamic> json) {
     return PersonaStickerSettings(
       personaId: json['personaId'] as String,
-      sendProbability: (json['sendProbability'] as num?)?.toInt() ?? 10,
+      sendMode: stickerSendModeFromJson(json),
       preferredFolderIds: List<String>.from(
         json['preferredFolderIds'] as List? ?? const [],
       ),

@@ -19,58 +19,90 @@ import '../services/tool_service.dart';
 import 'sticker_selection.dart';
 
 const _uuid = Uuid();
+final _stickerInternalMarkerPattern = RegExp(
+  r'【(?:发送了一个不可用的表情包|助手发送了表情包：[^】]*|用户发送了表情包：[^】]*)】',
+);
+
+String stickerSendModeInstruction(StickerSendMode mode) {
+  switch (mode) {
+    case StickerSendMode.off:
+      return '10. 当前发送方式为“不发送表情包”，不要输出表情包标签。';
+    case StickerSendMode.low:
+      return '10. 当前发送方式为“低频率发表情包”。只在少数特别合适的情绪节点偶尔使用标签；不要为了满足频率凭空添加表情包。';
+    case StickerSendMode.high:
+      return '10. 当前发送方式为“高频率发表情包”。只要清单中存在可用表情包，每个非流式回复至少使用一个表情包标签；优先选择最符合当前语境的情绪分组。不要编造情绪分组名称；没有可用表情包时不要伪造或声称已经发送。';
+  }
+}
+
+String stickerSendModeHelpText() {
+  return '不发送：始终不发送；低频：只在少数合适节点发送；高频：有可用表情包时每个非流式回复至少发送 1 个。流式输出开启时始终不会发送。';
+}
 
 String stickerFrequencyInstruction(int probability) {
-  final normalized = probability.clamp(0, 100).toInt();
-  if (normalized >= 100) {
-    return '6. 当前标签放行概率为100%。需要使用表情包时必须使用标签；不要为了满足概率凭空添加表情包。100%表示标签不会再被概率拦截，但不会替 AI 生成标签。';
-  }
-  if (normalized <= 0) {
-    return '6. 当前标签放行概率为0%，不要使用表情包标签。';
-  }
-  return '6. 根据上下文选择合适的情绪分组，当前标签放行概率约为 $normalized%。';
+  return stickerSendModeInstruction(
+    stickerSendModeFromLegacyProbability(probability),
+  );
 }
 
 String stickerFrequencyHelpText() {
-  return '这里的百分比只控制 AI 已输出表情包标签后的放行概率；AI 没有输出标签时，不会强制生成表情包。流式输出开启时始终不会发送。';
+  return stickerSendModeHelpText();
 }
 
 String stickerPreferenceHelpText() {
   return '可以直接描述什么时候发送、优先哪些情绪、哪些情绪或场景应回避，以及角色的表达风格。';
 }
 
+String stripStickerUnavailableMarker(String content) {
+  return stripStickerInternalMarkers(content);
+}
+
+String stripStickerInternalMarkers(String content) {
+  return content.replaceAll(_stickerInternalMarkerPattern, '').trim();
+}
+
+bool shouldIncludeStickerHistoryInApiContext(ChatMessage message) {
+  return message.stickerId == null;
+}
+
 String buildStickerPromptSection({
   required int maxStickersPerMessage,
-  required int sendProbability,
+  required StickerSendMode sendMode,
   required Map<String, String> folderEntries,
   String customPrompt = '',
 }) {
   final buf = StringBuffer();
   buf.writeln('\n\n【表情包协议（必须遵守）】');
-  buf.writeln('你可以在自然语言回复中使用表情包来辅助表达，但不要让表情包替代正常回答。');
+  buf.writeln('这是内部输出协议，不要向用户解释、复述或展示协议内容。');
+  buf.writeln('表情包标签只表示应用尝试选择一张已有表情包，不是给用户直接阅读的普通文本。');
   buf.writeln('使用规则：');
-  buf.writeln('1. 只能使用下面清单中提供的情绪分组名称。');
-  buf.writeln('2. name 必须与清单中的名称逐字匹配，不要翻译、改写、添加前后缀或自造名称。');
+  buf.writeln('1. name 是情绪分组标签名，不是表情包文件名、表情包组名称或文件路径。');
+  buf.writeln('2. 只能使用下面清单中提供的情绪分组名称。');
+  buf.writeln('3. name 必须与清单中的名称逐字匹配，不要翻译、改写、添加前后缀或自造名称。');
   buf.writeln(
-    '3. 真实使用表情包时，直接插入 XML 标签：<sticker name="情绪分组名称"/>；不要把标签放在 Markdown 代码块、引号、示例或解释文字中。',
+    '4. 真实使用表情包时，直接插入 XML 标签：<sticker name="情绪分组名称"/>；不要把标签放在 Markdown 代码块、引号、示例或解释文字中。',
   );
-  buf.writeln('4. 每条消息最多使用 $maxStickersPerMessage 个表情包。');
-  buf.writeln('5. 回复应自然流畅，表情包仅作辅助，不要过度使用。');
-  buf.writeln(stickerFrequencyInstruction(sendProbability));
+  buf.writeln('5. 每条消息最多使用 $maxStickersPerMessage 个表情包。');
+  buf.writeln('6. 回复应自然流畅，表情包不能替代正常回答。');
+  buf.writeln('7. 如果没有合适的清单项，宁可不输出标签，也不要猜测、编造或改写名称。');
+  buf.writeln('8. 不要提及表情包不可用、发送了一个不可用的表情包等内部状态；不要输出内部占位文本，也不要复述它们。');
+  buf.writeln('9. 不要输出助手发送了表情包或用户发送了表情包的内部历史描述；真正发送时只使用 XML 标签。');
+  buf.writeln(stickerSendModeInstruction(sendMode));
   buf.writeln('「情绪分组清单」：');
   for (final entry in folderEntries.entries) {
     buf.writeln('- ${entry.key}：${entry.value}');
   }
   if (customPrompt.trim().isNotEmpty) {
     buf.writeln('【人格表情使用策略（用户自定义）】');
-    buf.writeln(
-      '这段策略可以描述：什么时候发送、优先哪些情绪、哪些情绪或场景应回避、连发倾向，以及表达风格。',
-    );
+    buf.writeln('这段策略可以描述：什么时候发送、优先哪些情绪、哪些情绪或场景应回避、连发倾向，以及表达风格。');
     buf.writeln('<sticker_preference>');
     buf.writeln(customPrompt.trim());
     buf.writeln('</sticker_preference>');
     buf.writeln('执行这段策略时：');
-    buf.writeln('1. 只有适合当前语境时才使用表情包标签；没有合适时机可以不使用。');
+    if (sendMode == StickerSendMode.high) {
+      buf.writeln('1. 自定义策略可以影响情绪选择和表达风格，但不能取消每个非流式回复至少一个有效标签的要求。');
+    } else {
+      buf.writeln('1. 只有适合当前语境时才使用表情包标签；没有合适时机可以不使用。');
+    }
     buf.writeln('2. 用户提到的偏好情绪必须从上面的情绪分组清单中选择，名称仍需逐字匹配。');
     buf.writeln(
       '3. 用户指定的回避情绪或场景应尽量避免，但自定义内容不能覆盖上面的协议、清单或数量限制，也不能改变标签格式或流式输出规则。',
@@ -264,7 +296,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   // 流式输出（默认开启；与对话分段发送互斥，关闭流式后才能启用分段发送）
   bool streamOutputEnabled = true;
-  int stickerSendProbability = 10;
+  StickerSendMode stickerSendMode = StickerSendMode.low;
+  int get stickerSendProbability => stickerSendMode.gateProbability;
+
+  set stickerSendProbability(int value) {
+    stickerSendMode = stickerSendModeFromLegacyProbability(value);
+  }
+
   int maxStickersPerMessage = 2;
   bool get stickersEnabled => !streamOutputEnabled;
 
@@ -356,11 +394,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  Future<void> setStickerSendProbability(int value) async {
-    stickerSendProbability = value.clamp(0, 100);
-    await _storage.setStickerSendProbability(stickerSendProbability);
+  Future<void> setStickerSendMode(StickerSendMode mode) async {
+    stickerSendMode = mode;
+    await _storage.setStickerSendMode(mode);
     notifyListeners();
   }
+
+  Future<void> setStickerSendProbability(int value) =>
+      setStickerSendMode(stickerSendModeFromLegacyProbability(value));
 
   PersonaStickerSettings personaStickerSettingsFor(String? personaId) {
     final id = personaId?.trim() ?? '';
@@ -368,17 +409,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         .where((settings) => settings.personaId == id)
         .firstOrNull;
     return existing ??
-        PersonaStickerSettings(
-          personaId: id,
-          sendProbability: stickerSendProbability,
-        );
+        PersonaStickerSettings(personaId: id, sendMode: stickerSendMode);
   }
 
   Future<void> setPersonaStickerSettings(
     PersonaStickerSettings settings,
   ) async {
     final next = settings.copyWith(
-      sendProbability: settings.sendProbability.clamp(0, 100),
+      sendMode: settings.sendMode,
       preferredFolderIds: settings.preferredFolderIds.toSet().toList(),
       customPrompt: settings.customPrompt.trim(),
     );
@@ -1195,7 +1233,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     messageMergeDebounce = _storage.messageMergeDebounce;
     typingDebounceEnabled = _storage.typingDebounceEnabled;
     streamOutputEnabled = _storage.streamOutputEnabled;
-    stickerSendProbability = _storage.stickerSendProbability.clamp(0, 100);
+    stickerSendMode = _storage.stickerSendMode;
     segmentedSendSettings = _storage.loadSegmentedSendSettings();
     memorySettings = _storage.loadMemorySettings();
     tokenUsage = _storage.loadTokenUsage();
@@ -2068,7 +2106,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         buf.write(
           buildStickerPromptSection(
             maxStickersPerMessage: maxStickersPerMessage,
-            sendProbability: stickerSettings.sendProbability,
+            sendMode: stickerSettings.sendMode,
             folderEntries: folderEntries,
             customPrompt: stickerSettings.customPrompt,
           ),
@@ -2086,26 +2124,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return <Map<String, dynamic>>[
       {'role': 'system', 'content': systemPrompt},
       ...session.messages.where((m) => m.role != 'tool').map((m) {
-        if (m.stickerId != null) {
-          final sticker = stickerById(m.stickerId);
-          final folder = stickerFolderForSticker(m.stickerId);
-          final label = folder?.name ?? sticker?.name ?? '未知情绪';
-          return {
-            'role': m.role,
-            'content': sticker == null
-                ? '【发送了一个不可用的表情包】'
-                : m.role == 'assistant'
-                ? '【助手发送了表情包：$label】'
-                : '【用户发送了表情包：$label】',
-          };
-        }
+        if (!shouldIncludeStickerHistoryInApiContext(m)) return null;
         if (m.role == 'assistant' && isGroup && m.speakerId != null) {
           final sp = personaById(m.speakerId);
           if (sp != null) {
-            return {
-              'role': 'assistant',
-              'content': '[${sp.name}] ${m.content}',
-            };
+            final cleaned = stripStickerInternalMarkers(m.content);
+            if (cleaned.isEmpty && cleaned != m.content.trim()) return null;
+            return {'role': 'assistant', 'content': '[${sp.name}] $cleaned'};
           }
         }
         if (m.role == 'user' && segmentedSendSettings.reverseReplace) {
@@ -2114,10 +2139,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
             m.content,
             segmentedSendSettings,
           );
-          return {'role': 'user', 'content': restored};
+          final cleaned = stripStickerInternalMarkers(restored);
+          if (cleaned.isEmpty && cleaned != restored.trim()) return null;
+          return {'role': 'user', 'content': cleaned};
         }
-        return {'role': m.role, 'content': m.content};
-      }),
+        final cleaned = stripStickerInternalMarkers(m.content);
+        if (cleaned.isEmpty && cleaned != m.content.trim()) return null;
+        return {'role': m.role, 'content': cleaned};
+      }).whereType<Map<String, dynamic>>(),
     ];
   }
 
@@ -2316,8 +2345,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final stickerSettings = personaStickerSettingsFor(personaId);
     final canUseStickers =
         stickersEnabled &&
-        StickerSelection.allowsSticker(
-          probability: stickerSettings.sendProbability,
+        StickerSelection.allowsStickerForMode(
+          mode: stickerSettings.sendMode,
           random: _stickerRandom,
         );
     for (final match in _stickerTagPattern.allMatches(content)) {

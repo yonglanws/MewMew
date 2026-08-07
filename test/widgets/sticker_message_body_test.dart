@@ -92,4 +92,29 @@ void main() {
 
     expect(find.text('表情包不可用'), findsOneWidget);
   });
+
+  testWidgets('历史消息中的内部不可用占位词不会显示给用户', (tester) async {
+    final state = AppState(StorageService());
+    addTearDown(state.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: state,
+        child: MaterialApp(
+          theme: AppTheme.lightTheme(),
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: StickerMessageBody(
+                content: '前文【发送了一个不可用的表情包】后文',
+                styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.textContaining('发送了一个不可用的表情包'), findsNothing);
+    expect(find.textContaining('前文后文'), findsOneWidget);
+  });
 }

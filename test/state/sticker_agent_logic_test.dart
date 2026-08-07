@@ -11,25 +11,19 @@ import 'package:mewmew/state/app_state.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('表情包发送频率默认 10% 并持久化且限制在 0 到 100', () async {
+  test('表情包发送方式默认低频并支持持久化', () async {
     SharedPreferences.setMockInitialValues({});
     final storage = StorageService();
     await storage.init();
     final state = AppState(storage);
     addTearDown(state.dispose);
 
-    expect(state.stickerSendProbability, 10);
+    expect(state.stickerSendMode, StickerSendMode.low);
 
-    await state.setStickerSendProbability(150);
-    expect(state.stickerSendProbability, 100);
-
-    await state.setStickerSendProbability(-1);
-    expect(state.stickerSendProbability, 0);
-
-    await state.setStickerSendProbability(42);
+    await state.setStickerSendMode(StickerSendMode.high);
     final reloadedStorage = StorageService();
     await reloadedStorage.init();
-    expect(reloadedStorage.stickerSendProbability, 42);
+    expect(reloadedStorage.stickerSendMode, StickerSendMode.high);
   });
 
   test('按人格绑定和情绪文件夹名称筛选表情包并随机抽取', () {
@@ -113,44 +107,68 @@ void main() {
     expect(selectedIds, containsAll(['sticker-1', 'sticker-2']));
   });
 
-  test('发送频率 0% 禁用，100% 放行，中间值按概率判断', () {
+  test('表情包发送方式按不发送、低频和高频控制放行', () {
     expect(
-      StickerSelection.allowsSticker(probability: 0, random: Random(0)),
+      StickerSelection.allowsStickerForMode(
+        mode: StickerSendMode.off,
+        random: Random(0),
+      ),
       isFalse,
     );
     expect(
-      StickerSelection.allowsSticker(probability: 100, random: Random(0)),
+      StickerSelection.allowsStickerForMode(
+        mode: StickerSendMode.high,
+        random: _FixedRandom(0),
+      ),
       isTrue,
     );
     expect(
-      StickerSelection.allowsSticker(probability: 50, random: _FixedRandom(49)),
+      StickerSelection.allowsStickerForMode(
+        mode: StickerSendMode.high,
+        random: _FixedRandom(99),
+      ),
       isTrue,
     );
     expect(
-      StickerSelection.allowsSticker(probability: 50, random: _FixedRandom(50)),
+      StickerSelection.allowsStickerForMode(
+        mode: StickerSendMode.low,
+        random: _FixedRandom(24),
+      ),
+      isTrue,
+    );
+    expect(
+      StickerSelection.allowsStickerForMode(
+        mode: StickerSendMode.low,
+        random: _FixedRandom(25),
+      ),
       isFalse,
     );
   });
 
-  test('100%发送频率会要求 AI 在有合适情绪时输出标签并说明不会强制生成', () {
-    final instruction = stickerFrequencyInstruction(100);
+  test('高频发送方式要求每个非流式回复使用一个标签但不编造名称', () {
+    final instruction = stickerSendModeInstruction(StickerSendMode.high);
 
-    expect(instruction, contains('需要使用表情包时必须使用标签'));
-    expect(instruction, contains('不要为了满足概率凭空添加表情包'));
-    expect(instruction, contains('不会替 AI 生成标签'));
+    expect(instruction, contains('高频率发表情包'));
+    expect(instruction, contains('每个非流式回复至少使用一个表情包标签'));
+    expect(instruction, contains('不要编造情绪分组名称'));
+    expect(instruction, contains('没有可用表情包时不要伪造'));
   });
 
   test('表情包提示词明确协议、名称匹配和自定义偏好的边界', () {
     final prompt = buildStickerPromptSection(
       maxStickersPerMessage: 2,
-      sendProbability: 50,
+      sendMode: StickerSendMode.high,
       folderEntries: {'开心': '表达开心的情绪'},
       customPrompt: '开心时优先使用可爱的表情。',
     );
 
-    expect(prompt, contains('标签放行概率'));
+    expect(prompt, contains('高频率发表情包'));
+    expect(prompt, contains('name 是情绪分组标签名，不是表情包文件名'));
     expect(prompt, contains('name 必须与清单中的名称逐字匹配'));
     expect(prompt, contains('不要把标签放在 Markdown 代码块、引号、示例或解释文字中'));
+    expect(prompt, contains('不要提及表情包不可用'));
+    expect(prompt, contains('不要输出内部占位文本'));
+    expect(prompt, contains('不要输出助手发送了表情包或用户发送了表情包的内部历史描述'));
     expect(prompt, contains('【人格表情使用策略（用户自定义）】'));
     expect(prompt, contains('不能覆盖上面的协议、清单或数量限制'));
   });
@@ -158,7 +176,7 @@ void main() {
   test('用户自定义提示词会控制发送时机、情绪偏好、回避条件和表达风格', () {
     final prompt = buildStickerPromptSection(
       maxStickersPerMessage: 2,
-      sendProbability: 50,
+      sendMode: StickerSendMode.low,
       folderEntries: {'开心': '表达开心的情绪'},
       customPrompt: '被夸奖时优先使用开心，讨论严肃问题时不要发送。',
     );
@@ -183,19 +201,46 @@ void main() {
     expect(state.stickersEnabled, isTrue);
   });
 
-  test('人格表情包设置按人格持久化并保持默认值', () async {
+  test('历史表情包消息不会把内部发送标记注入下一轮 AI 上下文', () {
+    final stickerMessage = ChatMessage(
+      id: 'sticker-message',
+      role: 'assistant',
+      content: '',
+      timestamp: DateTime(2026),
+      stickerId: 'sticker-1',
+    );
+    final textMessage = ChatMessage(
+      id: 'text-message',
+      role: 'assistant',
+      content: '普通回复',
+      timestamp: DateTime(2026),
+    );
+
+    expect(shouldIncludeStickerHistoryInApiContext(stickerMessage), isFalse);
+    expect(shouldIncludeStickerHistoryInApiContext(textMessage), isTrue);
+  });
+
+  test('历史文本中的表情包内部历史描述不会继续注入 AI 上下文', () {
+    expect(stripStickerInternalMarkers('前文【助手发送了表情包：疑问】后文'), '前文后文');
+    expect(stripStickerInternalMarkers('前文【用户发送了表情包：开心】后文'), '前文后文');
+  });
+
+  test('人格表情包发送方式按人格持久化并保持低频默认值', () async {
     SharedPreferences.setMockInitialValues({});
     final storage = StorageService();
     await storage.init();
     final state = AppState(storage);
     addTearDown(state.dispose);
 
-    expect(state.personaStickerSettingsFor('persona-1').sendProbability, 10);
+    expect(
+      state.personaStickerSettingsFor('persona-1').sendMode,
+      StickerSendMode.low,
+    );
 
     await state.setPersonaStickerSettings(
       PersonaStickerSettings(
         personaId: 'persona-1',
-        sendProbability: 65,
+        sendMode: StickerSendMode.high,
         preferredFolderIds: ['folder-happy'],
         customPrompt: '开心时优先发送轻松可爱的表情。',
       ),
@@ -204,7 +249,7 @@ void main() {
     final reloadedStorage = StorageService();
     await reloadedStorage.init();
     final saved = reloadedStorage.loadPersonaStickerSettings().single;
-    expect(saved.sendProbability, 65);
+    expect(saved.sendMode, StickerSendMode.high);
     expect(saved.preferredFolderIds, ['folder-happy']);
     expect(saved.customPrompt, '开心时优先发送轻松可爱的表情。');
   });

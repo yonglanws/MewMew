@@ -29,6 +29,7 @@ class StorageService {
   static const _kTypingDebounceEnabled = 'typing_debounce_enabled';
   static const _kSegmentedSendSettings = 'segmented_send_settings';
   static const _kStreamOutputEnabled = 'stream_output_enabled';
+  static const _kStickerSendMode = 'sticker_send_mode';
   static const _kStickerSendProbability = 'sticker_send_probability';
   static const _kStickerItems = 'sticker_items_v2';
   static const _kStickerFolders = 'sticker_folders_v2';
@@ -227,10 +228,30 @@ class StorageService {
   Future<void> setStreamOutputEnabled(bool v) =>
       _prefs.setBool(_kStreamOutputEnabled, v);
 
-  int get stickerSendProbability =>
-      _prefs.getInt(_kStickerSendProbability) ?? 10;
+  StickerSendMode get stickerSendMode {
+    final rawMode = _prefs.getString(_kStickerSendMode);
+    if (rawMode != null) {
+      for (final mode in StickerSendMode.values) {
+        if (mode.name == rawMode) return mode;
+      }
+    }
+    return stickerSendModeFromLegacyProbability(
+      _prefs.getInt(_kStickerSendProbability) ?? 10,
+    );
+  }
+
+  Future<void> setStickerSendMode(StickerSendMode mode) async {
+    await Future.wait<void>([
+      _prefs.setString(_kStickerSendMode, mode.name),
+      // Keep this value for older builds that do not know about sendMode.
+      _prefs.setInt(_kStickerSendProbability, mode.gateProbability),
+    ]);
+  }
+
+  int get stickerSendProbability => stickerSendMode.gateProbability;
+
   Future<void> setStickerSendProbability(int value) =>
-      _prefs.setInt(_kStickerSendProbability, value);
+      setStickerSendMode(stickerSendModeFromLegacyProbability(value));
 
   // Token 使用统计
   TokenUsage loadTokenUsage() {

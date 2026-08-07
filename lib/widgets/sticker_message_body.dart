@@ -44,10 +44,11 @@ class StickerMessageBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.read<AppState>();
-    final matches = _stickerPattern.allMatches(content).toList();
+    final displayContent = stripStickerInternalMarkers(content);
+    final matches = _stickerPattern.allMatches(displayContent).toList();
     if (matches.isEmpty) {
       return MarkdownBody(
-        data: content,
+        data: displayContent,
         selectable: true,
         styleSheet: styleSheet,
       );
@@ -56,7 +57,7 @@ class StickerMessageBody extends StatelessWidget {
     var start = 0;
     var count = 0;
     for (final match in matches) {
-      final before = content.substring(start, match.start);
+      final before = displayContent.substring(start, match.start);
       if (before.trim().isNotEmpty) {
         children.add(
           MarkdownBody(data: before, selectable: true, styleSheet: styleSheet),
@@ -90,7 +91,7 @@ class StickerMessageBody extends StatelessWidget {
       }
       start = match.end;
     }
-    final after = content.substring(start);
+    final after = displayContent.substring(start);
     if (after.trim().isNotEmpty) {
       children.add(
         MarkdownBody(data: after, selectable: true, styleSheet: styleSheet),
