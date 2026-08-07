@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
+import '../services/segmented_splitter.dart';
 import '../state/app_state.dart';
 
 /// 对话分段发送设置独立页面
@@ -30,6 +31,7 @@ class SegmentedSendSettingsPage extends StatelessWidget {
             title: Text('对话分段发送'),
           ),
           // ---- 基础设置 ----
+          SliverToBoxAdapter(child: _OutputModeSection(state: state)),
           SliverToBoxAdapter(
             child: streamEnabled
                 ? Container(
@@ -65,6 +67,17 @@ class SegmentedSendSettingsPage extends StatelessWidget {
                     ),
                   )
                 : const SizedBox.shrink(),
+          ),
+          SliverToBoxAdapter(
+            child: _PresetSection(
+              settings: s,
+              enabled: e && !streamEnabled,
+              onSelected: (preset) =>
+                  _update(context, _settingsForPreset(s, preset)),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: _PreviewSection(settings: s, enabled: e),
           ),
           SliverToBoxAdapter(
             child: _Section(
@@ -105,7 +118,8 @@ class SegmentedSendSettingsPage extends StatelessWidget {
                   icon: Icons.format_align_left,
                   iconColor: cs.tertiary,
                   title: '最长处理字数',
-                  subtitle: '回复超过 ${s.maxProcessLength} 字时截断后再分段（0 = 不限制）',
+                  subtitle:
+                      '回复超过 ${s.maxProcessLength} 字时保留整段，避免截断（0 = 不设业务上限）',
                   trailing: _ValueLabel(
                     s.maxProcessLength == 0 ? '不限制' : '${s.maxProcessLength} 字',
                     e,
@@ -391,6 +405,20 @@ class SegmentedSendSettingsPage extends StatelessWidget {
   }
 
   static void _update(BuildContext context, SegmentedSendSettings next) {
+    if (next.replaceRules.length > 50) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('替换规则最多保存 50 条')));
+      return;
+    }
+    if (next.replaceRules.any(
+      (rule) => rule.find.length > 500 || rule.replace.length > 500,
+    )) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('单条替换规则最多 500 个字符')));
+      return;
+    }
     context.read<AppState>().setSegmentedSendSettings(next);
   }
 
@@ -540,7 +568,22 @@ class SegmentedSendSettingsPage extends StatelessWidget {
           ),
           FilledButton(
             onPressed: () {
-              onConfirm(controller.text.trim());
+              final candidate = controller.text.trim();
+              if (candidate.length > 200) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  const SnackBar(content: Text('正则表达式最多 200 个字符')),
+                );
+                return;
+              }
+              try {
+                if (candidate.isNotEmpty) RegExp(candidate);
+              } on FormatException catch (error) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text('正则无效：${error.message}')),
+                );
+                return;
+              }
+              onConfirm(candidate);
               Navigator.pop(ctx);
             },
             child: const Text('确定'),
@@ -552,6 +595,228 @@ class SegmentedSendSettingsPage extends StatelessWidget {
 }
 
 // ---------- 通用组件（与 MemorySettingsPage 风格一致） ----------
+
+String _outputModeLabel(AssistantOutputMode mode) {
+  switch (mode) {
+    case AssistantOutputMode.streaming:
+      return '实时流式';
+    case AssistantOutputMode.complete:
+      return '整段显示';
+    case AssistantOutputMode.segmented:
+      return '分段发送';
+  }
+}
+
+String _outputModeDescription(AssistantOutputMode mode) {
+  switch (mode) {
+    case AssistantOutputMode.streaming:
+      return '边生成边显示，回复只保留一个气泡';
+    case AssistantOutputMode.complete:
+      return '等待生成完成后一次性显示';
+    case AssistantOutputMode.segmented:
+      return '生成完成后按段落依次发送';
+  }
+}
+
+class _OutputModeSection extends StatelessWidget {
+  final AppState state;
+
+  const _OutputModeSection({required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return _Section(
+      title: '回复显示方式',
+      children: [
+        _SettingTile(
+          icon: Icons.output_rounded,
+          iconColor: cs.primary,
+          title: _outputModeLabel(state.assistantOutputMode),
+          subtitle: _outputModeDescription(state.assistantOutputMode),
+          trailing: DropdownButtonHideUnderline(
+            child: DropdownButton<AssistantOutputMode>(
+              value: state.assistantOutputMode,
+              items: [
+                for (final mode in AssistantOutputMode.values)
+                  DropdownMenuItem(
+                    value: mode,
+                    child: Text(_outputModeLabel(mode)),
+                  ),
+              ],
+              onChanged: (mode) {
+                if (mode != null) {
+                  state.setAssistantOutputMode(mode);
+                }
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _presetName(SegmentedSendSettings s) {
+  if (s.maxSegments == 3 &&
+      (s.linearBase - 0.25).abs() < 0.001 &&
+      (s.linearCharFactor - 0.025).abs() < 0.001) {
+    return 'fast';
+  }
+  if (s.maxSegments == 5 &&
+      (s.linearBase - 0.6).abs() < 0.001 &&
+      (s.linearCharFactor - 0.055).abs() < 0.001) {
+    return 'natural';
+  }
+  if (s.maxSegments == 6 &&
+      (s.linearBase - 0.9).abs() < 0.001 &&
+      (s.linearCharFactor - 0.08).abs() < 0.001) {
+    return 'slow';
+  }
+  return 'custom';
+}
+
+SegmentedSendSettings _settingsForPreset(
+  SegmentedSendSettings s,
+  String preset,
+) {
+  switch (preset) {
+    case 'fast':
+      return s.copyWith(
+        maxSegments: 3,
+        linearBase: 0.25,
+        linearCharFactor: 0.025,
+      );
+    case 'natural':
+      return s.copyWith(
+        maxSegments: 5,
+        linearBase: 0.6,
+        linearCharFactor: 0.055,
+      );
+    case 'slow':
+      return s.copyWith(
+        maxSegments: 6,
+        linearBase: 0.9,
+        linearCharFactor: 0.08,
+      );
+    default:
+      return s;
+  }
+}
+
+class _PresetSection extends StatelessWidget {
+  final SegmentedSendSettings settings;
+  final bool enabled;
+  final ValueChanged<String> onSelected;
+
+  const _PresetSection({
+    required this.settings,
+    required this.enabled,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final selected = _presetName(settings);
+    return _Section(
+      title: '延迟预设',
+      children: [
+        _SettingTile(
+          icon: Icons.speed_outlined,
+          iconColor: cs.secondary,
+          title: '发送节奏',
+          subtitle: selected == 'custom' ? '自定义：保留当前底层参数' : '快速、自然或慢速发送节奏',
+          trailing: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: selected,
+              items: const [
+                DropdownMenuItem(value: 'fast', child: Text('快速')),
+                DropdownMenuItem(value: 'natural', child: Text('自然')),
+                DropdownMenuItem(value: 'slow', child: Text('慢速')),
+                DropdownMenuItem(value: 'custom', child: Text('自定义')),
+              ],
+              onChanged: enabled
+                  ? (value) {
+                      if (value != null) onSelected(value);
+                    }
+                  : null,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PreviewSection extends StatelessWidget {
+  final SegmentedSendSettings settings;
+  final bool enabled;
+
+  const _PreviewSection({required this.settings, required this.enabled});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final previewSettings = settings.copyWith(enabled: true);
+    final plans = SegmentedSplitter.plan(
+      '你好，这是一段用于预览的较长回复。它会按照当前配置尝试分成多个气泡，方便你调整发送节奏和段落长度。',
+      previewSettings,
+    );
+    final totalDelay = plans.fold<Duration>(
+      Duration.zero,
+      (sum, plan) => sum + plan.delay,
+    );
+    return _Section(
+      title: '预览分段',
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                enabled ? '使用示例文本预览当前分段和等待时间，不会写入聊天记录。' : '启用分段发送后可预览当前参数。',
+                style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '共 ${plans.length} 段，预计等待 ${_formatDuration(totalDelay)}',
+                style: TextStyle(
+                  color: cs.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 10),
+              for (var i = 0; i < plans.length; i++)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '第 ${i + 1} 段 · '
+                    '${plans[i].delay == Duration.zero ? '立即' : '${_formatDuration(plans[i].delay)} 后'}\n'
+                    '${plans[i].text}',
+                    style: TextStyle(color: cs.onSurface, height: 1.35),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  static String _formatDuration(Duration duration) {
+    final seconds = duration.inMilliseconds / 1000;
+    if (seconds == 0) return '0 秒';
+    return '${seconds.toStringAsFixed(seconds < 10 ? 1 : 0)} 秒';
+  }
+}
 
 class _Section extends StatelessWidget {
   final String title;

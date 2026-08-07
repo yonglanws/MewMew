@@ -29,6 +29,7 @@ class StorageService {
   static const _kTypingDebounceEnabled = 'typing_debounce_enabled';
   static const _kSegmentedSendSettings = 'segmented_send_settings';
   static const _kStreamOutputEnabled = 'stream_output_enabled';
+  static const _kAssistantOutputMode = 'assistant_output_mode';
   static const _kStickerSendMode = 'sticker_send_mode';
   static const _kStickerSendProbability = 'sticker_send_probability';
   static const _kStickerItems = 'sticker_items_v2';
@@ -222,6 +223,25 @@ class StorageService {
 
   Future<void> saveSegmentedSendSettings(SegmentedSendSettings s) =>
       _prefs.setString(_kSegmentedSendSettings, jsonEncode(s.toJson()));
+
+  AssistantOutputMode loadAssistantOutputMode() {
+    final raw = _prefs.getString(_kAssistantOutputMode);
+    if (raw != null) {
+      for (final mode in AssistantOutputMode.values) {
+        if (mode.name == raw) return mode;
+      }
+    }
+
+    final legacyStream = _prefs.getBool(_kStreamOutputEnabled);
+    final legacySegmented = loadSegmentedSendSettings().enabled;
+    if (legacyStream == true) return AssistantOutputMode.streaming;
+    if (legacySegmented) return AssistantOutputMode.segmented;
+    if (legacyStream == false) return AssistantOutputMode.complete;
+    return AssistantOutputMode.streaming;
+  }
+
+  Future<void> setAssistantOutputMode(AssistantOutputMode mode) =>
+      _prefs.setString(_kAssistantOutputMode, mode.name);
 
   // 流式输出开关（与分段发送互斥）
   bool get streamOutputEnabled => _prefs.getBool(_kStreamOutputEnabled) ?? true;

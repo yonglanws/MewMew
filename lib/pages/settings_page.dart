@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/models.dart';
 import '../state/app_state.dart';
 import '../utils/fast_route.dart';
 import '../utils/large_app_bar_title.dart';
@@ -13,6 +14,17 @@ import 'sticker_management_page.dart';
 import 'tools_page.dart';
 
 /// 设置页：按功能分组的列表
+String _outputModeDescription(AssistantOutputMode mode) {
+  switch (mode) {
+    case AssistantOutputMode.streaming:
+      return '实时流式：边生成边显示';
+    case AssistantOutputMode.complete:
+      return '整段显示：生成完成后一次显示';
+    case AssistantOutputMode.segmented:
+      return '分段发送：生成完成后按段发送';
+  }
+}
+
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
 
@@ -110,12 +122,31 @@ class SettingsPage extends StatelessWidget {
                 _SettingTile(
                   icon: Icons.stream_outlined,
                   iconColor: cs.primary,
-                  title: '流式输出',
-                  subtitle: '控制 AI 回复的实时显示方式',
-                  trailing: Switch(
-                    value: state.streamOutputEnabled,
-                    onChanged: (v) =>
-                        context.read<AppState>().setStreamOutputEnabled(v),
+                  title: '回复显示方式',
+                  subtitle: _outputModeDescription(state.assistantOutputMode),
+                  trailing: DropdownButtonHideUnderline(
+                    child: DropdownButton<AssistantOutputMode>(
+                      value: state.assistantOutputMode,
+                      items: const [
+                        DropdownMenuItem(
+                          value: AssistantOutputMode.streaming,
+                          child: Text('实时流式'),
+                        ),
+                        DropdownMenuItem(
+                          value: AssistantOutputMode.complete,
+                          child: Text('整段显示'),
+                        ),
+                        DropdownMenuItem(
+                          value: AssistantOutputMode.segmented,
+                          child: Text('分段发送'),
+                        ),
+                      ],
+                      onChanged: (mode) {
+                        if (mode != null) {
+                          context.read<AppState>().setAssistantOutputMode(mode);
+                        }
+                      },
+                    ),
                   ),
                 ),
                 _SettingTile(

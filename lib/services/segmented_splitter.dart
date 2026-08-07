@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:characters/characters.dart';
+
 import '../models/models.dart';
 
 /// 对话分段发送的纯算法工具
@@ -12,35 +14,49 @@ import '../models/models.dart';
 /// 5. 计算线性延迟：delay = linearBase + chars * linearCharFactor。
 class SegmentedSplitter {
   /// 主切分符：。？！?!\n…
-  static final RegExp _primarySplitRegex =
-      RegExp(r'[。？！?!\n…]+');
+  static final RegExp _primarySplitRegex = RegExp(r'[。？！?!\n…]+');
 
   /// 次级切分符：，、,.;:;：；
-  static final RegExp _secondarySplitRegex =
-      RegExp(r'[，、,.;:;：；]+');
+  static final RegExp _secondarySplitRegex = RegExp(r'[，、,.;:;：；]+');
 
-  /// 成对符号：用于"避免在内部切分"哨兵
-  static const _openPairs = '"“『「〈《【〔［｛（(';
-  static const _closePairs = '"”』」〉》】〕］｝）)';
+  /// 成对符号：用于避免在内部切分。
+  ///
+  /// 直双引号是同一个字符同时充当开、闭符号，不能再用两个 contains
+  /// 集合配合 depth 计数，否则每遇到一个引号都会先加深再减深。
+  static const _pairClosers = <String, String>{
+    '“': '”',
+    '‘': '’',
+    '「': '」',
+    '『': '』',
+    '〈': '〉',
+    '《': '》',
+    '【': '】',
+    '〔': '〕',
+    '［': '］',
+    '｛': '｝',
+    '（': '）',
+    '(': ')',
+    '[': ']',
+    '"': '"',
+  };
 
   /// Markdown 代码块 ```...```（含语言标识）
-  static final RegExp _codeFenceRegex =
-      RegExp(r'```[\s\S]*?```');
+  static final RegExp _codeFenceRegex = RegExp(r'```[\s\S]*?```');
+
   /// Markdown 行内代码 `...`
-  static final RegExp _inlineCodeRegex =
-      RegExp(r'`[^`\n]+`');
+  static final RegExp _inlineCodeRegex = RegExp(r'`[^`\n]+`');
+
   /// Markdown 链接 [text](url) 与图片 ![alt](url)：避免在 url/title 中切分
-  static final RegExp _mdLinkRegex =
-      RegExp(r'!?\[[^\]]*\]\([^)]*\)');
+  static final RegExp _mdLinkRegex = RegExp(r'!?\[[^\]]*\]\([^)]*\)');
+
   /// Markdown 删除线 ~~...~~
-  static final RegExp _mdDelRegex =
-      RegExp(r'~~[^~\n]+~~');
+  static final RegExp _mdDelRegex = RegExp(r'~~[^~\n]+~~');
+
   /// Markdown 加粗 **...**
-  static final RegExp _mdBoldRegex =
-      RegExp(r'\*\*[^*\n]+\*\*');
+  static final RegExp _mdBoldRegex = RegExp(r'\*\*[^*\n]+\*\*');
+
   /// Markdown 强调 __...__
-  static final RegExp _mdStrongRegex =
-      RegExp(r'__[^_\n]+__');
+  static final RegExp _mdStrongRegex = RegExp(r'__[^_\n]+__');
 
   /// 占位符格式：会把上述 Markdown 块替换成原子占位，确保切分时整体不会被切坏。
   /// 占位符被设计成"不会触发任意主/次级标点"，长度 1，避免影响字数考量过多偏差。
@@ -61,6 +77,7 @@ class SegmentedSplitter {
         return key;
       });
     }
+
     // 顺序：先代码块（避免被单反引号误吃），再行内代码、链接、删除线、加粗、强调
     text = protectOne(_codeFenceRegex);
     text = protectOne(_inlineCodeRegex);
@@ -81,10 +98,7 @@ class SegmentedSplitter {
 
   /// 对 AI 回复文本应用整套分段前置处理（清理 + 正向替换）。
   /// 返回处理后的纯文本，分段前调用。
-  static String preprocessForSplit(
-    String raw,
-    SegmentedSendSettings s,
-  ) {
+  static String preprocessForSplit(String raw, SegmentedSendSettings s) {
     var text = raw;
     if (s.preCleanRegex.isNotEmpty) {
       try {
@@ -102,10 +116,7 @@ class SegmentedSplitter {
   /// 对用户输入文本应用反向替换。
   /// 若 reverseReplace=false，原样返回。
   /// 若 reverseReplace=true，每条规则反向作用：replace → find。
-  static String applyReverseReplace(
-    String input,
-    SegmentedSendSettings s,
-  ) {
+  static String applyReverseReplace(String input, SegmentedSendSettings s) {
     if (!s.reverseReplace) return input;
     var text = input;
     for (final rule in s.replaceRules) {
@@ -136,35 +147,35 @@ class SegmentedSplitter {
   ///
   /// 返回清理后的段列表。若不需分段（太短/被关闭），返回 length==1
   /// 即整段原文。
-  static List<String> split(
-    String raw,
-    SegmentedSendSettings s,
-  ) {
-    final normalized = s.copyWith(
-      maxProcessLength: s.maxProcessLength.clamp(0, 50000),
-      maxSegments: s.maxSegments.clamp(1, 50),
-      minSegmentLength: s.minSegmentLength.clamp(1, 1000),
-      balanceLowerRatio: s.balanceLowerRatio.clamp(0.0, 0.99),
-      balanceUpperRatio: s.balanceUpperRatio.clamp(0.01, 1.0),
-      linearCharFactor: s.linearCharFactor.clamp(0.0, 0.3),
-    );
+  static List<String> split(String raw, SegmentedSendSettings s) {
+    final normalized = s.normalized();
     final lowerRatio = normalized.balanceLowerRatio;
     final upperRatio = normalized.balanceUpperRatio < lowerRatio
         ? lowerRatio
         : normalized.balanceUpperRatio;
     final safe = normalized.copyWith(balanceUpperRatio: upperRatio);
+    const absoluteSafetyLimit = 50000;
+    final processLimit = safe.maxProcessLength == 0
+        ? absoluteSafetyLimit
+        : safe.maxProcessLength;
+    // 先检查原始 grapheme 数，超出安全边界时不执行用户自定义正则，
+    // 既避免主 isolate 被复杂表达式拖住，也保证原文完整返回。
+    if (safe.enabled && raw.characters.length > processLimit) {
+      return [raw];
+    }
     // 1. 前置清理与正向替换
     var text = preprocessForSplit(raw, safe);
     if (text.isEmpty) return [];
 
-    // 2. 字数过短，直接后置清理后返回单段
-    if (!safe.enabled || text.length < safe.minTriggerLength) {
+    // 超过最长处理字数时保留完整内容，不再截断或丢失尾部。
+    // 0 代表不设业务上限，但仍保留绝对安全上限，避免异常输入拖垮分段算法。
+    if (safe.enabled && text.characters.length > processLimit) {
       return [postCleanSegment(text, safe)];
     }
 
-    // 3. 超过最长处理字数：截断
-    if (safe.maxProcessLength > 0 && text.length > safe.maxProcessLength) {
-      text = text.substring(0, safe.maxProcessLength);
+    // 2. 字数过短，直接后置清理后返回单段
+    if (!safe.enabled || text.characters.length < safe.minTriggerLength) {
+      return [postCleanSegment(text, safe)];
     }
 
     // 3.5 保护 Markdown 代码块/行内代码/链接为原子占位符，
@@ -191,9 +202,7 @@ class SegmentedSplitter {
     final balanced = _balanceSegments(cleaned, safe);
 
     // 7. 还原 Markdown 占位符
-    return balanced
-        .map((seg) => _restoreMarkdown(seg, placeholders))
-        .toList();
+    return balanced.map((seg) => _restoreMarkdown(seg, placeholders)).toList();
   }
 
   /// 按 maxSegments 总数均分已切成"原始段"的结果
@@ -210,14 +219,16 @@ class SegmentedSplitter {
     SegmentedSendSettings s,
   ) {
     if (segments.length <= 1) return segments;
-    final totalLen = segments.fold<int>(0, (acc, e) => acc + e.length);
+    final totalLen = segments.fold<int>(
+      0,
+      (acc, e) => acc + e.characters.length,
+    );
     if (totalLen == 0) return [];
 
     // 目标段数：先用 maxSegments 的上限，但如果总长不够均分多段，
     // 也至少保证每段 ≥ minSegmentLength
     final maxByLen = (totalLen / s.minSegmentLength).floor();
-    var target = s.maxSegments;
-    if (maxByLen > 0 && target > maxByLen) target = maxByLen;
+    var target = maxByLen > 0 ? min(s.maxSegments, maxByLen) : 1;
     if (target < 1) target = 1;
     final idealLen = (totalLen / target).floor();
     final lower = (idealLen * s.balanceLowerRatio).floor();
@@ -230,10 +241,10 @@ class SegmentedSplitter {
     var bufLen = 0;
     for (var i = 0; i < segments.length; i++) {
       final seg = segments[i];
-      final combined = bufLen + seg.length;
-      final needMore = bufLen < s.minSegmentLength ||
-          bufLen < lower;
-      final wouldBurst = bufLen > 0 && combined > upper && bufLen >= s.minSegmentLength;
+      final combined = bufLen + seg.characters.length;
+      final needMore = bufLen < s.minSegmentLength || bufLen < lower;
+      final wouldBurst =
+          bufLen > 0 && combined > upper && bufLen >= s.minSegmentLength;
       if (bufLen > 0 && needMore && !wouldBurst) {
         buf.write(seg);
         bufLen = combined;
@@ -241,7 +252,7 @@ class SegmentedSplitter {
         // 收一个段，再以当前 seg 开启新段
         coalesced.add(buf.toString().trim());
         buf = StringBuffer(seg);
-        bufLen = seg.length;
+        bufLen = seg.characters.length;
       } else {
         // 继续累加，等下一段决定
         buf.write(seg);
@@ -260,33 +271,33 @@ class SegmentedSplitter {
     for (final seg in coalesced) {
       if (accLen == 0) {
         acc.write(seg);
-        accLen = seg.length;
+        accLen = seg.characters.length;
         continue;
       }
       // 若当前 acc 不足下限，继续并入
       if (accLen < lower) {
-        if (accLen + seg.length <= upper) {
+        if (accLen + seg.characters.length <= upper) {
           acc.write(seg);
-          accLen += seg.length;
+          accLen += seg.characters.length;
         } else {
           // 并入后超出上限太多：先把 acc 收尾，seg 开新段
           step2.add(acc.toString().trim());
           acc = StringBuffer(seg);
-          accLen = seg.length;
+          accLen = seg.characters.length;
         }
       } else if (accLen >= upper) {
         // acc 已经偏长，先收尾
         step2.add(acc.toString().trim());
         acc = StringBuffer(seg);
-        accLen = seg.length;
-      } else if (accLen + seg.length <= upper) {
+        accLen = seg.characters.length;
+      } else if (accLen + seg.characters.length <= upper) {
         acc.write(seg);
-        accLen += seg.length;
+        accLen += seg.characters.length;
       } else {
         // 加入会超上限：收尾
         step2.add(acc.toString().trim());
         acc = StringBuffer(seg);
-        accLen = seg.length;
+        accLen = seg.characters.length;
       }
     }
     if (accLen > 0) step2.add(acc.toString().trim());
@@ -295,7 +306,7 @@ class SegmentedSplitter {
     // 的子段向后续子段合并
     final out = <String>[];
     for (final seg in step2) {
-      if (seg.length > upper) {
+      if (seg.characters.length > upper) {
         final sub = _tokenizeSecondaryRespectingPairs(seg);
         if (sub.length > 1) {
           out.addAll(_mergeShortSubs(sub, s.minSegmentLength));
@@ -313,9 +324,11 @@ class SegmentedSplitter {
         continue;
       }
       final last = merged2.last;
-      if (last.length < lower && last.length + seg.length <= upper) {
+      if (last.characters.length < lower &&
+          last.characters.length + seg.characters.length <= upper) {
         merged2[merged2.length - 1] = (last + seg).trim();
-      } else if (seg.length < lower && merged2.length + 0 + 1 > target) {
+      } else if (seg.characters.length < lower &&
+          merged2.length + 0 + 1 > target) {
         merged2[merged2.length - 1] = (last + seg).trim();
       } else {
         merged2.add(seg);
@@ -323,9 +336,9 @@ class SegmentedSplitter {
     }
 
     // 第 5 步：兜底——段数仍超过 maxSegments：把超出部分并入倒数第二段
-    if (merged2.length > s.maxSegments) {
-      final head = merged2.sublist(0, s.maxSegments - 1).toList();
-      final tail = merged2.sublist(s.maxSegments - 1).join('').trim();
+    if (merged2.length > target) {
+      final head = merged2.sublist(0, target - 1).toList();
+      final tail = merged2.sublist(target - 1).join('').trim();
       head.add(tail);
       return head;
     }
@@ -338,7 +351,7 @@ class SegmentedSplitter {
     for (final sub in subs) {
       if (buf.isEmpty) {
         buf = sub;
-      } else if (buf.length < lower) {
+      } else if (buf.characters.length < lower) {
         buf += sub;
       } else {
         out.add(buf);
@@ -351,22 +364,39 @@ class SegmentedSplitter {
 
   /// 在避免切到成对符号内部的前提下，按主级标点切分文本
   ///
-  /// 成对符号计数：开符号 +1，闭符号 -1；只有配对深度回到 0 的位置才允许切。
+  /// 只有所有成对符号闭合时才允许切分。
   static List<String> _tokenizeRespectingPairs(String text) {
+    return _tokenizeAt(text, _primarySplitRegex);
+  }
+
+  static List<String> _tokenizeAt(String text, RegExp splitRegex) {
     final result = <String>[];
     final buf = StringBuffer();
-    var depth = 0;
+    final expectedClosers = <String>[];
     var i = 0;
     while (i < text.length) {
       final ch = text[i];
-      if (_openPairs.contains(ch)) depth++;
-      if (_closePairs.contains(ch)) depth = (depth > 0) ? depth - 1 : 0;
-      // 仅在配对深度为 0 时检查切分点
-      if (depth == 0 && _primarySplitRegex.matchAsPrefix(ch) != null) {
+      final escaped = _isEscaped(text, i);
+      if (!escaped) {
+        final closer = _pairClosers[ch];
+        if (closer != null) {
+          if (closer == ch &&
+              expectedClosers.isNotEmpty &&
+              expectedClosers.last == ch) {
+            expectedClosers.removeLast();
+          } else {
+            expectedClosers.add(closer);
+          }
+        } else if (expectedClosers.isNotEmpty && expectedClosers.last == ch) {
+          expectedClosers.removeLast();
+        }
+      }
+      // 仅在所有成对符号闭合时检查切分点
+      if (expectedClosers.isEmpty && splitRegex.matchAsPrefix(ch) != null) {
         buf.write(ch);
         // 吞掉后续连续的切分符
         while (i + 1 < text.length &&
-            _primarySplitRegex.matchAsPrefix(text[i + 1]) != null) {
+            splitRegex.matchAsPrefix(text[i + 1]) != null) {
           i++;
           buf.write(text[i]);
         }
@@ -382,33 +412,17 @@ class SegmentedSplitter {
     return result;
   }
 
+  static bool _isEscaped(String text, int index) {
+    var backslashes = 0;
+    for (var i = index - 1; i >= 0 && text[i] == '\\'; i--) {
+      backslashes++;
+    }
+    return backslashes.isOdd;
+  }
+
   /// 在避免切到成对符号内部的前提下，按次级标点切分段（用于过长段的补救）
   static List<String> _tokenizeSecondaryRespectingPairs(String text) {
-    final result = <String>[];
-    final buf = StringBuffer();
-    var depth = 0;
-    var i = 0;
-    while (i < text.length) {
-      final ch = text[i];
-      if (_openPairs.contains(ch)) depth++;
-      if (_closePairs.contains(ch)) depth = (depth > 0) ? depth - 1 : 0;
-      if (depth == 0 && _secondarySplitRegex.matchAsPrefix(ch) != null) {
-        buf.write(ch);
-        while (i + 1 < text.length &&
-            _secondarySplitRegex.matchAsPrefix(text[i + 1]) != null) {
-          i++;
-          buf.write(text[i]);
-        }
-        result.add(buf.toString());
-        buf.clear();
-        i++;
-        continue;
-      }
-      buf.write(ch);
-      i++;
-    }
-    if (buf.isNotEmpty) result.add(buf.toString());
-    return result;
+    return _tokenizeAt(text, _secondarySplitRegex);
   }
 
   /// 计算分段间的延迟（秒）：线性延迟 = base + 字数 * factor
@@ -427,16 +441,15 @@ class SegmentedSplitter {
   }
 
   /// 给一段长文本 + 设置 → 返回分段结果与每段对应的延迟
-  static List<SegmentPlan> plan(
-    String raw,
-    SegmentedSendSettings s,
-  ) {
+  static List<SegmentPlan> plan(String raw, SegmentedSendSettings s) {
     final segs = split(raw, s);
     return [
-      for (final seg in segs)
+      for (var i = 0; i < segs.length; i++)
         SegmentPlan(
-          text: seg,
-          delay: segmentDelay(segmentChars: seg.length, s: s),
+          text: segs[i],
+          delay: i == 0
+              ? Duration.zero
+              : segmentDelay(segmentChars: segs[i].characters.length, s: s),
         ),
     ];
   }
