@@ -87,6 +87,16 @@ void main() {
     expect(result.join(), raw);
   });
 
+  test('逗号永远不是自动断句点，长句保持到句末边界', () {
+    const raw = '第一句很长，包含多个逗号，但是中间没有句号。第二句。';
+    final result = SegmentedSplitter.split(
+      raw,
+      settings(maxSegments: 2, minSegmentLength: 5),
+    );
+
+    expect(result, ['第一句很长，包含多个逗号，但是中间没有句号。', '第二句。']);
+  });
+
   test('第一段立即显示，后续段才计算等待时间', () {
     final result = SegmentedSplitter.plan(
       '第一句。第二句。',
