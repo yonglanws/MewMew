@@ -303,13 +303,21 @@ class SegmentedSplitter {
     if (accLen > 0) step2.add(acc.toString().trim());
 
     // 第 3 步：对仍过长（> upper）的段用次级标点补切；切完低于 minSegmentLength
-    // 的子段向后续子段合并
+    // 的子段向后续子段合并。逗号是软切点：在不明显超出理想长度时，
+    // 尽量等到分号/冒号等更强边界，避免把一句话过早拆开。
     final out = <String>[];
+    final secondarySoftUpper = max(upper, (idealLen * 1.2).ceil());
     for (final seg in step2) {
       if (seg.characters.length > upper) {
         final sub = _tokenizeSecondaryRespectingPairs(seg);
         if (sub.length > 1) {
-          out.addAll(_mergeShortSubs(sub, s.minSegmentLength));
+          out.addAll(
+            _mergeShortSubs(
+              sub,
+              s.minSegmentLength,
+              softUpper: secondarySoftUpper,
+            ),
+          );
           continue;
         }
       }
@@ -345,21 +353,38 @@ class SegmentedSplitter {
     return merged2;
   }
 
-  static List<String> _mergeShortSubs(List<String> subs, int lower) {
+  static List<String> _mergeShortSubs(
+    List<String> subs,
+    int lower, {
+    required int softUpper,
+  }) {
     final out = <String>[];
     var buf = '';
     for (final sub in subs) {
       if (buf.isEmpty) {
         buf = sub;
-      } else if (buf.characters.length < lower) {
-        buf += sub;
       } else {
-        out.add(buf);
-        buf = sub;
+        final bufLen = buf.characters.length;
+        final combinedLen = (buf + sub).characters.length;
+        final keepWeakBoundary =
+            _endsWithWeakSecondary(buf) && combinedLen <= softUpper;
+        if (bufLen < lower || keepWeakBoundary) {
+          buf += sub;
+        } else {
+          out.add(buf);
+          buf = sub;
+        }
       }
     }
     if (buf.isNotEmpty) out.add(buf);
     return out;
+  }
+
+  static bool _endsWithWeakSecondary(String text) {
+    final trimmed = text.trimRight();
+    if (trimmed.isEmpty) return false;
+    final last = trimmed.characters.last;
+    return last == '，' || last == ',' || last == '、';
   }
 
   /// 在避免切到成对符号内部的前提下，按主级标点切分文本

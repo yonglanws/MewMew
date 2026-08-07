@@ -75,6 +75,18 @@ void main() {
     );
   });
 
+  test('同一句中优先在分号处断句，不在前面的逗号处过早切开', () {
+    const raw = '第一部分先说明当前问题的背景，补充关键原因；第二部分给出处理方案，说明注意事项。补充一句。';
+    final result = SegmentedSplitter.split(
+      raw,
+      settings(maxSegments: 2, minSegmentLength: 5),
+    );
+
+    expect(result, hasLength(2));
+    expect(result.first, endsWith('；'));
+    expect(result.join(), raw);
+  });
+
   test('第一段立即显示，后续段才计算等待时间', () {
     final result = SegmentedSplitter.plan(
       '第一句。第二句。',
