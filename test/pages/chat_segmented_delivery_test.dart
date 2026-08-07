@@ -14,7 +14,7 @@ import 'package:mewmew/state/app_state.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('聊天页显示分段进度并支持立即显示全部', (tester) async {
+  testWidgets('聊天页不显示内部的分段进度控件', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final storage = StorageService();
     await storage.init();
@@ -60,16 +60,12 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('正在发送 1/3'), findsOneWidget);
-    expect(find.text('立即显示全部'), findsOneWidget);
-    expect(find.byTooltip('停止回复'), findsWidgets);
-
-    await tester.tap(find.text('立即显示全部'));
-    await tester.pump();
-    expect(await done, SegmentedDeliveryResult.flushed);
-    state.notifyListeners();
-    await tester.pump();
+    expect(find.textContaining('正在发送'), findsNothing);
     expect(find.text('立即显示全部'), findsNothing);
+    expect(find.byTooltip('停止回复'), findsNothing);
+
+    scheduler.cancelAll();
+    expect(await done, SegmentedDeliveryResult.cancelled);
     await tester.pump(const Duration(milliseconds: 500));
   });
 }

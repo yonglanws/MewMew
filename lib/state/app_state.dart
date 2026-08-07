@@ -188,25 +188,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// 是否有合并回复正在等待触发
   bool get isPendingMerge => _mergeSessionId != null;
 
-  bool isSegmentDelivering(String sessionId) =>
-      _segmentedDeliveryScheduler.isActive(sessionId);
-
-  int segmentedDeliveredCount(String sessionId) {
-    final total = _segmentedDeliveryScheduler.totalCount(sessionId);
-    if (total == 0) return 0;
-    // 第一段在进入 scheduler 前已经立即落地，所以进度从 1 开始展示。
-    return _segmentedDeliveryScheduler.deliveredCount(sessionId) + 1;
-  }
-
-  int segmentedTotalCount(String sessionId) {
-    final total = _segmentedDeliveryScheduler.totalCount(sessionId);
-    return total == 0 ? 0 : total + 1;
-  }
-
-  void showAllPendingSegments(String sessionId) {
-    _segmentedDeliveryScheduler.flushSession(sessionId);
-  }
-
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);

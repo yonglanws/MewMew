@@ -33,12 +33,8 @@ void main() {
     );
     await pumpEventQueue();
 
-    expect(state.isSegmentDelivering('session-1'), isTrue);
-    expect(state.segmentedDeliveredCount('session-1'), 1);
-    expect(state.segmentedTotalCount('session-1'), 3);
     state.stopGeneration();
 
     expect(await done, SegmentedDeliveryResult.cancelled);
-    expect(state.isSegmentDelivering('session-1'), isFalse);
   });
 }

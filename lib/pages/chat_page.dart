@@ -790,13 +790,6 @@ class _ChatPageState extends State<ChatPage> {
                     },
                   ),
           ),
-          if (session != null && state.isSegmentDelivering(session.id))
-            _SegmentDeliveryBar(
-              delivered: state.segmentedDeliveredCount(session.id),
-              total: state.segmentedTotalCount(session.id),
-              onShowAll: () => state.showAllPendingSegments(session.id),
-              onStop: state.stopGeneration,
-            ),
           _InputArea(
             controller: _input,
             focusNode: _focusNode,
@@ -819,73 +812,6 @@ class _ChatPageState extends State<ChatPage> {
             onSelectCandidate: _selectCandidate,
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// 分段发送进度
-class _SegmentDeliveryBar extends StatelessWidget {
-  final int delivered;
-  final int total;
-  final VoidCallback onShowAll;
-  final VoidCallback onStop;
-
-  const _SegmentDeliveryBar({
-    required this.delivered,
-    required this.total,
-    required this.onShowAll,
-    required this.onStop,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final safeTotal = total <= 0 ? 1 : total;
-    final safeDelivered = delivered.clamp(0, safeTotal);
-    final progress = safeDelivered / safeTotal;
-    return Semantics(
-      label: '正在发送第 $safeDelivered 段，共 $safeTotal 段',
-      liveRegion: true,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(12, 2, 12, 2),
-        padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '正在发送 $safeDelivered/$safeTotal',
-                    style: TextStyle(
-                      color: scheme.onSurfaceVariant,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 3,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                ],
-              ),
-            ),
-            TextButton(onPressed: onShowAll, child: const Text('立即显示全部')),
-            IconButton(
-              tooltip: '停止回复',
-              onPressed: onStop,
-              icon: const Icon(Icons.stop_circle_outlined),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1028,12 +954,6 @@ class _InputArea extends StatelessWidget {
                   ),
                   const SizedBox(width: 4),
                   // 发送按钮：保持常态展示
-                  if (isSending)
-                    IconButton(
-                      tooltip: '停止回复',
-                      onPressed: onStop,
-                      icon: const Icon(Icons.stop_circle_outlined),
-                    ),
                   AnimatedOpacity(
                     opacity: canSend ? 1.0 : 0.5,
                     duration: const Duration(milliseconds: 220),
