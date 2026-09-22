@@ -5,6 +5,7 @@
 一个基于 Flutter 的 AI 角色扮演对话应用：人格管理、长期记忆、单聊群聊、兼容 OpenAI 格式的 API
 
 [![Flutter][flutter-badge]][flutter-link] [![Dart][dart-badge]][dart-link] [![Android][android-badge]][android-link] [![GPL-3.0][license-badge]][license-link] 
+
 [项目简介](#项目简介) · [主要功能](#主要功能) · [快速开始](#快速开始) · [项目结构](#项目结构) · [故障排除](#故障排除) · [致谢](#致谢)
 
 </div>
