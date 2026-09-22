@@ -1,14 +1,19 @@
-import 'package:flutter/foundation.dart';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/ai_service.dart';
 import '../services/logger_service.dart';
+import '../services/memory/memory_transfer.dart';
 import '../state/app_state.dart';
 import '../utils/fast_route.dart';
 import '../utils/large_app_bar_title.dart';
 import 'dashboard_page.dart';
+import 'memory_graph_page.dart';
 import 'memory_page.dart';
 
 /// 记忆系统设置页（独立页面）
@@ -24,8 +29,8 @@ class MemorySettingsPage extends StatelessWidget {
     final state = context.watch<AppState>();
     final cs = Theme.of(context).colorScheme;
     final embeddingValid = state.embeddingApiConfig.isValid;
-    final isMemoryEnabled = state.injectMemories && embeddingValid;
-    // 当总开关未开启（或未配置嵌入模型）时，下方的参数与记忆管理等选项均被禁用
+    // 嵌入 API 不再是硬门槛：未配置时关键词与图谱检索仍可用
+    final isMemoryEnabled = state.injectMemories;
     final memoryDisabled = !isMemoryEnabled;
 
     return Scaffold(
@@ -38,23 +43,24 @@ class MemorySettingsPage extends StatelessWidget {
             ),
             title: Text('记忆系统', style: largeAppBarTitleStyle(context)),
           ),
-          // 嵌入未配置或总开关未开启时显示提示
+          // 嵌入未配置时显示信息性提示（非硬门槛）
           if (!embeddingValid)
             SliverToBoxAdapter(
               child: Container(
                 margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: cs.errorContainer.withValues(alpha: 0.4),
+                  color: cs.tertiaryContainer.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: cs.error.withValues(alpha: 0.4)),
+                  border:
+                      Border.all(color: cs.tertiary.withValues(alpha: 0.4)),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(
-                      Icons.warning_amber_rounded,
-                      color: cs.error,
+                      Icons.info_outline_rounded,
+                      color: cs.tertiary,
                       size: 22,
                     ),
                     const SizedBox(width: 12),
@@ -63,15 +69,15 @@ class MemorySettingsPage extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '未设置嵌入 API',
+                            '未配置嵌入 API（可选）',
                             style: TextStyle(
                               fontWeight: FontWeight.w700,
-                              color: cs.onErrorContainer,
+                              color: cs.onTertiaryContainer,
                             ),
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '请先在设置中配置嵌入 API，否则无法开启记忆系统。',
+                            '关键词检索与图谱检索仍可正常工作；配置嵌入 API 后可启用语义向量检索，召回更准确。',
                             style: TextStyle(
                               fontSize: 13,
                               color: cs.onSurfaceVariant,
@@ -94,14 +100,13 @@ class MemorySettingsPage extends StatelessWidget {
                   icon: Icons.power_settings_new_rounded,
                   iconColor: cs.tertiary,
                   title: '记忆系统总开关',
-                  subtitle: state.injectMemories && embeddingValid
+                  subtitle: state.injectMemories
                       ? '已开启：对话中自动检索并注入长期记忆'
-                      : (embeddingValid ? '已关闭：暂不注入长期记忆' : '已关闭（未配置嵌入模型）'),
+                      : '已关闭：暂不注入长期记忆',
                   trailing: Switch(
-                    value: state.injectMemories && embeddingValid,
-                    onChanged: !embeddingValid
-                        ? null
-                        : (v) => context.read<AppState>().setInjectMemories(v),
+                    value: state.injectMemories,
+                    onChanged: (v) =>
+                        context.read<AppState>().setInjectMemories(v),
                   ),
                 ),
               ],
@@ -125,6 +130,16 @@ class MemorySettingsPage extends StatelessWidget {
                         ),
                 ),
                 _SettingTile(
+                  icon: Icons.account_tree_outlined,
+                  iconColor: cs.tertiary,
+                  title: '记忆图谱',
+                  subtitle:
+                      '节点 ${state.graphStore.nodeCount} · 边 ${state.graphStore.edgeCount}',
+                  onTap: memoryDisabled
+                      ? null
+                      : () => _push(context, const MemoryGraphPage()),
+                ),
+                _SettingTile(
                   icon: Icons.psychology_outlined,
                   iconColor: cs.primary,
                   title: '查看记忆',
@@ -144,10 +159,12 @@ class MemorySettingsPage extends StatelessWidget {
                 _SettingTile(
                   icon: Icons.filter_alt_outlined,
                   iconColor: cs.tertiary,
-                  title: '会话过滤模式',
-                  subtitle: state.memorySettings.useSessionFiltering
-                      ? '会话隔离：每个会话拥有独立记忆空间'
-                      : '全局共享：所有会话共享同一个记忆池',
+                  title: '记忆隔离模式',
+                  subtitle: switch (state.memorySettings.memoryScopeMode) {
+                    'persona' => '人物隔离：同一人物的不同会话共用记忆',
+                    'global' => '全局共享：所有会话共用一个记忆池',
+                    _ => '会话隔离：每个会话拥有独立记忆空间',
+                  },
                   onTap: memoryDisabled
                       ? null
                       : () => _showSessionFilterDialog(context),
@@ -311,10 +328,147 @@ class MemorySettingsPage extends StatelessWidget {
               ],
             ),
           ),
+          // 记忆整理
+          SliverToBoxAdapter(
+            child: _Section(
+              title: '记忆整理',
+              children: [
+                _SettingTile(
+                  icon: Icons.merge_type_outlined,
+                  iconColor: cs.primary,
+                  title: '自动整理合并',
+                  subtitle: state.memorySettings.consolidationEnabled
+                      ? '已开启：同一会话的零散旧记忆自动合并，原件归档'
+                      : '已关闭：保持每条记忆独立',
+                  trailing: Switch(
+                    value: state.memorySettings.consolidationEnabled,
+                    onChanged: memoryDisabled
+                        ? null
+                        : (v) => context.read<AppState>().updateMemorySettings(
+                              state.memorySettings
+                                  .copyWith(consolidationEnabled: v),
+                            ),
+                  ),
+                ),
+                _SettingTile(
+                  icon: Icons.bolt_outlined,
+                  iconColor: cs.secondary,
+                  title: '立即整理',
+                  subtitle: '手动触发一轮整理合并（不受冷却限制）',
+                  onTap: memoryDisabled ||
+                          !state.memorySettings.consolidationEnabled
+                      ? null
+                      : () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('整理进行中…')),
+                        );
+                        await context.read<AppState>().runConsolidationManually();
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('整理完成')),
+                        );
+                      },
+                ),
+              ],
+            ),
+          ),
+          // 维护与数据
+          SliverToBoxAdapter(
+            child: _Section(
+              title: '维护与数据',
+              children: [
+                _SettingTile(
+                  icon: Icons.health_and_safety_outlined,
+                  iconColor: cs.primary,
+                  title: '立即维护',
+                  subtitle: '执行衰减、原子清扫与旧记忆清理',
+                  onTap: memoryDisabled
+                      ? null
+                      : () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        await context.read<AppState>().runMemoryMaintenance();
+                        messenger.showSnackBar(
+                          const SnackBar(content: Text('记忆维护完成')),
+                        );
+                      },
+                ),
+                _SettingTile(
+                  icon: Icons.ios_share_outlined,
+                  iconColor: cs.secondary,
+                  title: '导出记忆',
+                  subtitle: '用系统文件选择器保存 JSON',
+                  onTap: memoryDisabled ? null : () => _exportMemories(context),
+                ),
+                _SettingTile(
+                  icon: Icons.download_outlined,
+                  iconColor: cs.tertiary,
+                  title: '导入记忆',
+                  subtitle: '从系统文件选择器读取 JSON',
+                  onTap: memoryDisabled ? null : () => _importMemories(context),
+                ),
+              ],
+            ),
+          ),
           const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
         ],
       ),
     );
+  }
+
+  static Future<void> _exportMemories(BuildContext context) async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final json = exportMemoriesJson(
+      memories: state.memories,
+      atoms: state.memoryAtoms,
+    );
+    final now = DateTime.now();
+    final name =
+        'mewmew-memories-${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.json';
+    try {
+      final saved = await FilePicker.platform.saveFile(
+        dialogTitle: '导出记忆',
+        fileName: name,
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        bytes: utf8.encode(json),
+      );
+      if (saved == null) return;
+      messenger.showSnackBar(const SnackBar(content: Text('记忆已导出')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('导出失败：$e')));
+    }
+  }
+
+  static Future<void> _importMemories(BuildContext context) async {
+    final state = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        dialogTitle: '导入记忆',
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        withData: true,
+      );
+      if (picked == null || picked.files.isEmpty) return;
+      final file = picked.files.single;
+      final String raw;
+      if (file.bytes != null) {
+        raw = utf8.decode(file.bytes!);
+      } else if (file.path != null) {
+        raw = await File(file.path!).readAsString();
+      } else {
+        messenger.showSnackBar(const SnackBar(content: Text('无法读取所选文件')));
+        return;
+      }
+      final report = importMemoriesJson(raw, existingMemories: state.memories);
+      final imported = await state.importMemoryEntries(report.newMemories);
+      messenger.showSnackBar(
+        SnackBar(content: Text('导入 $imported 条，跳过 ${report.skipped} 条')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('导入失败：$e')));
+    }
   }
 
   static void _push(BuildContext context, Widget page) {
@@ -337,14 +491,26 @@ class MemorySettingsPage extends StatelessWidget {
     bool allowEmpty = false,
     required ValueChanged<String> onConfirm,
   }) {
-    final api = context.read<AppState>().activeApi;
-    if (api == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('请先在 API 配置中添加并激活接口')));
+    // 使用已配置 API 的模型（不再联网拉取 /models）
+    final state = context.read<AppState>();
+    final modelSources = <String, Set<String>>{};
+    for (final api in state.apiConfigs) {
+      final model = api.model.trim();
+      if (model.isEmpty) continue;
+      (modelSources[model] ??= {}).add(api.name);
+    }
+    if (modelSources.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在 API 配置中添加至少一个模型')),
+      );
       return;
     }
-    showModalBottomSheet(
+    final entries = modelSources.entries
+        .map((e) => (model: e.key, sources: e.value.toList()..sort()))
+        .toList()
+      ..sort((a, b) => a.model.compareTo(b.model));
+
+    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -352,7 +518,7 @@ class MemorySettingsPage extends StatelessWidget {
         title: title,
         current: current,
         allowEmpty: allowEmpty,
-        api: api,
+        entries: entries,
         onConfirm: onConfirm,
       ),
     );
@@ -363,38 +529,43 @@ class MemorySettingsPage extends StatelessWidget {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('会话过滤模式'),
+        title: const Text('记忆隔离模式'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            RadioListTile<bool>(
-              value: true,
-              groupValue: state.memorySettings.useSessionFiltering,
-              title: const Text('会话隔离模式'),
-              subtitle: const Text('每个会话拥有独立的记忆空间'),
-              onChanged: (v) {
-                if (v == true) {
+            for (final option in const [
+              (
+                'session',
+                '会话隔离',
+                '每个会话拥有独立的记忆空间',
+              ),
+              (
+                'persona',
+                '人物隔离',
+                '同一人物的不同会话共用记忆，人物之间互不混用',
+              ),
+              (
+                'global',
+                '全局共享',
+                '所有会话共用同一个记忆池',
+              ),
+            ])
+              RadioListTile<String>(
+                value: option.$1,
+                groupValue: state.memorySettings.memoryScopeMode,
+                title: Text(option.$2),
+                subtitle: Text(option.$3),
+                onChanged: (v) {
+                  if (v == null) return;
                   context.read<AppState>().updateMemorySettings(
-                    state.memorySettings.copyWith(useSessionFiltering: true),
+                    state.memorySettings.copyWith(
+                      memoryScopeMode: v,
+                      useSessionFiltering: v == 'session',
+                    ),
                   );
                   Navigator.pop(ctx);
-                }
-              },
-            ),
-            RadioListTile<bool>(
-              value: false,
-              groupValue: state.memorySettings.useSessionFiltering,
-              title: const Text('全局记忆模式'),
-              subtitle: const Text('所有会话共享同一个记忆池'),
-              onChanged: (v) {
-                if (v == false) {
-                  context.read<AppState>().updateMemorySettings(
-                    state.memorySettings.copyWith(useSessionFiltering: false),
-                  );
-                  Navigator.pop(ctx);
-                }
-              },
-            ),
+                },
+              ),
           ],
         ),
         actions: [
@@ -548,18 +719,18 @@ class MemorySettingsPage extends StatelessWidget {
   }
 }
 
-/// 模型选择底部弹窗：从接口获取模型列表供用户选择
+/// 模型选择底部弹窗：列出已配置 API 的模型
 class _ModelPickerSheet extends StatefulWidget {
   final String title;
   final String current;
   final bool allowEmpty; // 是否允许"留空"选项
-  final ApiConfig api;
+  final List<({String model, List<String> sources})> entries;
   final ValueChanged<String> onConfirm;
 
   const _ModelPickerSheet({
     required this.title,
     required this.current,
-    required this.api,
+    required this.entries,
     required this.onConfirm,
     this.allowEmpty = false,
   });
@@ -569,31 +740,19 @@ class _ModelPickerSheet extends StatefulWidget {
 }
 
 class _ModelPickerSheetState extends State<_ModelPickerSheet> {
-  List<String>? _models;
-  String? _error;
-  final _query = ValueNotifier('');
-
-  @override
-  void initState() {
-    super.initState();
-    _loadModels();
-  }
-
-  Future<void> _loadModels() async {
-    try {
-      final models = await AiService.listModels(
-        baseUrl: widget.api.baseUrl,
-        apiKey: widget.api.apiKey,
-      );
-      if (mounted) setState(() => _models = models);
-    } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
-    }
-  }
+  String _query = '';
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final filtered = _query.isEmpty
+        ? widget.entries
+        : widget.entries
+            .where((e) =>
+                e.model.toLowerCase().contains(_query) ||
+                e.sources.any((s) => s.toLowerCase().contains(_query)))
+            .toList();
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(
@@ -604,7 +763,7 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
             child: Row(
               children: [
                 Text(
-                  widget.title,
+                  '${widget.title}（${widget.entries.length}）',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const Spacer(),
@@ -626,7 +785,8 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
                 title: const Text('使用当前 API 主模型'),
                 dense: true,
                 onTap: () {
-                  onConfirmEmpty(context);
+                  widget.onConfirm('');
+                  Navigator.pop(context);
                 },
               ),
             ),
@@ -635,87 +795,47 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
             child: TextField(
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search, size: 20),
-                hintText: '搜索模型…',
+                hintText: '搜索模型或 API 名称…',
                 isDense: true,
                 border: OutlineInputBorder(),
               ),
-              onChanged: (v) => _query.value = v,
+              onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
             ),
           ),
           const SizedBox(height: 8),
-          if (_models == null && _error == null)
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: CircularProgressIndicator(),
-            )
-          else if (_error != null)
-            Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                children: [
-                  const Icon(Icons.error_outline, size: 32),
-                  const SizedBox(height: 8),
-                  Text(
-                    '加载失败：$_error',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: cs.outline),
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              itemCount: filtered.length,
+              itemBuilder: (_, i) {
+                final entry = filtered[i];
+                final selected = entry.model == widget.current;
+                return ListTile(
+                  leading: Icon(
+                    selected ? Icons.check_circle : Icons.memory,
+                    color: selected ? cs.primary : null,
                   ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _loadModels,
-                    icon: const Icon(Icons.refresh, size: 18),
-                    label: const Text('重试'),
+                  title: Text(
+                    entry.model,
+                    style: const TextStyle(fontFamily: 'monospace'),
                   ),
-                ],
-              ),
-            )
-          else
-            Flexible(
-              child: ValueListenableBuilder<String>(
-                valueListenable: _query,
-                builder: (_, q, __) {
-                  final filtered = q.isEmpty
-                      ? _models!
-                      : _models!
-                            .where(
-                              (m) => m.toLowerCase().contains(q.toLowerCase()),
-                            )
-                            .toList();
-                  return ListView.builder(
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    itemCount: filtered.length,
-                    itemBuilder: (_, i) {
-                      final m = filtered[i];
-                      final selected = m == widget.current;
-                      return ListTile(
-                        leading: Icon(
-                          selected ? Icons.check_circle : Icons.memory,
-                          color: selected ? cs.primary : null,
-                        ),
-                        title: Text(
-                          m,
-                          style: const TextStyle(fontFamily: 'monospace'),
-                        ),
-                        dense: true,
-                        onTap: () {
-                          widget.onConfirm(m);
-                          Navigator.pop(context);
-                        },
-                      );
-                    },
-                  );
-                },
-              ),
+                  subtitle: Text(
+                    entry.sources.join('、'),
+                    style: TextStyle(fontSize: 11, color: cs.outline),
+                  ),
+                  dense: true,
+                  onTap: () {
+                    widget.onConfirm(entry.model);
+                    Navigator.pop(context);
+                  },
+                );
+              },
             ),
+          ),
         ],
       ),
     );
-  }
-
-  void onConfirmEmpty(BuildContext context) {
-    widget.onConfirm('');
-    Navigator.pop(context);
   }
 }
 
@@ -1028,7 +1148,8 @@ class _EmbeddingApiSheetState extends State<_EmbeddingApiSheet> {
             Text('嵌入 API 配置', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 4),
             Text(
-              '用于记忆系统的嵌入向量计算，可指向不同于对话 API 的服务商',
+              '可选：为记忆系统提供语义向量检索，可指向不同于对话 API 的服务商；'
+              '未配置时关键词与图谱检索仍可正常使用',
               style: TextStyle(
                 fontSize: 12,
                 color: Theme.of(context).colorScheme.outline,
@@ -1167,7 +1288,9 @@ class _SettingTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final disabled = onTap == null;
+    // 只有“既不能点、也没有开关”的项才算禁用。
+    // 仅带 Switch 的项以前会被误判成灰色。
+    final disabled = onTap == null && trailing == null;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       leading: Container(

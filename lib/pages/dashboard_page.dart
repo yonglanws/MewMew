@@ -1,9 +1,15 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../state/app_state.dart';
+import '../utils/fast_route.dart';
 import '../utils/large_app_bar_title.dart';
+import 'archived_memories_page.dart';
+import 'memory_graph_page.dart';
+import 'memory_page.dart';
 
 /// 全局仪表盘页面
 class DashboardPage extends StatefulWidget {
@@ -1145,35 +1151,36 @@ class _MemoryDashboardCard extends StatelessWidget {
     final state = context.watch<AppState>();
     final cs = Theme.of(context).colorScheme;
 
-    final isMemoryEnabled =
-        state.injectMemories && state.embeddingApiConfig.isValid;
+    final isMemoryEnabled = state.injectMemories;
 
     final total = state.memories.length;
-    final manual = state.memories.where((m) => m.source == 'manual').length;
-    final auto = state.memories.where((m) => m.source == 'auto').length;
-    final summary = state.memories.where((m) => m.source == 'summary').length;
-
-    // 1. 今日新增记忆
-    final today = DateTime.now();
-    final todayStart = DateTime(today.year, today.month, today.day);
-    final todayCount = state.memories
-        .where((m) => !m.createdAt.isBefore(todayStart))
+    final archived =
+        state.memories.where((m) => m.status == 'archived').length;
+    final activeCount =
+        state.memories.where((m) => m.status == 'active').length;
+    final atomCount = state.memoryAtoms.length;
+    final graphNodeCount = state.graphStore.nodeCount;
+    final mergedCount = state.memories
+        .where((m) => m.consolidatedFrom.isNotEmpty)
         .length;
 
-    // 2. 每会话平均记忆数（计算有记忆或存在的会话数）
-    final sessionIdsWithMemory = state.memories
-        .map((m) => m.sessionId)
-        .whereType<String>()
-        .toSet();
-    final activeSessionCount = sessionIdsWithMemory.isNotEmpty
-        ? sessionIdsWithMemory.length
-        : (state.sessions.isNotEmpty ? state.sessions.length : 1);
-    final avgPerSession = (total / activeSessionCount).toStringAsFixed(1);
+    // 重要性分布（10 档，对齐原版 importance_distribution）
+    final importanceBins = List<int>.filled(10, 0);
+    for (final m in state.memories) {
+      final display = m.importance <= 1 ? m.importance * 10 : m.importance;
+      importanceBins[math.min(9, display.floor())]++;
+    }
 
-    // 3. 最活跃的会话 (Top 10)
+    // 原子类型分布（对齐原版 atom_breakdown）
+    final atomCounts = <AtomType, int>{};
+    for (final a in state.memoryAtoms) {
+      atomCounts[a.atomType] = (atomCounts[a.atomType] ?? 0) + 1;
+    }
+    final atomEntries = atomCounts.entries.toList()
+      ..sort((x, y) => y.value.compareTo(x.value));
+
+    // 最活跃的会话
     final top10Sessions = _getTop10Sessions(state);
-
-    // 4. 近7天每日记忆新增趋势
     final dailyTrend = _getDailyMemoryTrend(state.memories);
 
     return _Card(
@@ -1205,40 +1212,81 @@ class _MemoryDashboardCard extends StatelessWidget {
         firstChild: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 4大核心指标卡片网络
+            // 6 大核心指标（可点击：总记忆/活跃 → 记忆列表，归档 → 归档页，图谱 → 图谱页）
             Row(
               children: [
                 Expanded(
                   child: _MemoryStatBox(
-                    label: '总记忆数',
+                    label: '总记忆',
                     value: '$total',
                     icon: Icons.psychology_outlined,
                     color: cs.primary,
+                    onTap: () => _pushMemoryPage(context),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: _MemoryStatBox(
-                    label: '今日新增',
-                    value: '+$todayCount',
-                    icon: Icons.today_rounded,
-                    color: cs.tertiary,
+                    label: '活跃',
+                    value: '$activeCount',
+                    icon: Icons.check_circle_outline,
+                    color: Colors.green,
+                    onTap: () => _pushMemoryPage(context),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: _MemoryStatBox(
-                    label: '每会话平均',
-                    value: avgPerSession,
-                    icon: Icons.auto_awesome_motion_rounded,
-                    color: cs.secondary,
+                    label: '已归档',
+                    value: '$archived',
+                    icon: Icons.archive_outlined,
+                    color: const Color(0xFFE7B24F),
+                    onTap: () => Navigator.push(
+                      context,
+                      FastRoute(builder: (_) => const ArchivedMemoriesPage()),
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _MemoryStatBox(
+                    label: '图谱节点',
+                    value: '$graphNodeCount',
+                    icon: Icons.hub_outlined,
+                    color: cs.tertiary,
+                    onTap: () => Navigator.push(
+                      context,
+                      FastRoute(builder: (_) => const MemoryGraphPage()),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MemoryStatBox(
+                    label: '记忆原子',
+                    value: '$atomCount',
+                    icon: Icons.scatter_plot_outlined,
+                    color: cs.secondary,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _MemoryStatBox(
+                    label: '合并产物',
+                    value: '$mergedCount',
+                    icon: Icons.merge_type_outlined,
+                    color: const Color(0xFFEF7D6C),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
 
-            // 近7天记忆增长趋势图 (折线图 - 缩窄对齐上方的柱状图)
+            // 近7天记忆增长趋势折线图
             Text(
               '近7天记忆增长趋势',
               style: TextStyle(
@@ -1264,6 +1312,38 @@ class _MemoryDashboardCard extends StatelessWidget {
                 ),
               ),
             ),
+            const SizedBox(height: 16),
+
+            // 重要性分布（10 档竖向迷你柱状图）
+            Text(
+              '重要性分布',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (total == 0)
+              Text('暂无记忆', style: TextStyle(fontSize: 12, color: cs.outline))
+            else
+              _ImportanceColumnChart(bins: importanceBins),
+            const SizedBox(height: 14),
+
+            // 原子类型分布（堆叠比例条 + 图例）
+            Text(
+              '原子类型分布',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (atomEntries.isEmpty)
+              Text('暂无原子', style: TextStyle(fontSize: 12, color: cs.outline))
+            else
+              _AtomTypeStackBar(entries: atomEntries),
             const SizedBox(height: 16),
 
             // 最活跃会话 (Top 10 记忆分布)
@@ -1315,40 +1395,15 @@ class _MemoryDashboardCard extends StatelessWidget {
             const Divider(height: 1),
             const SizedBox(height: 12),
 
-            // 来源分布条
-            if (total > 0) ...[
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: SizedBox(
-                  height: 8,
-                  child: Row(
-                    children: [
-                      _barSegment(cs.primary, manual / total),
-                      _barSegment(cs.tertiary, auto / total),
-                      _barSegment(cs.secondary, summary / total),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-            ],
-            // 图例
-            Wrap(
-              spacing: 12,
-              runSpacing: 6,
-              children: [
-                _Legend(color: cs.primary, label: '手动 $manual'),
-                _Legend(color: cs.tertiary, label: 'AI自动 $auto'),
-                _Legend(color: cs.secondary, label: '总结 $summary'),
-              ],
-            ),
-            const SizedBox(height: 14),
             // 配置信息
             _InfoRow(
               icon: Icons.filter_alt_outlined,
-              label: '会话过滤',
-              value:
-                  state.memorySettings.useSessionFiltering ? '会话隔离' : '全局共享',
+              label: '记忆隔离',
+              value: switch (state.memorySettings.memoryScopeMode) {
+                'persona' => '人物隔离',
+                'global' => '全局共享',
+                _ => '会话隔离',
+              },
             ),
             const SizedBox(height: 8),
             _InfoRow(
@@ -1363,12 +1418,48 @@ class _MemoryDashboardCard extends StatelessWidget {
     );
   }
 
-  Widget _barSegment(Color color, double ratio) {
-    return Flexible(
-      flex: (ratio * 1000).round().clamp(1, 1000),
-      child: Container(color: color),
+  static String _atomTypeLabel(AtomType type) => switch (type) {
+        AtomType.factual => '事实',
+        AtomType.episodic => '情节',
+        AtomType.relational => '关系',
+        AtomType.preference => '偏好',
+        AtomType.planned => '计划',
+        AtomType.unknown => '未分类',
+      };
+
+  void _pushMemoryPage(BuildContext context) {
+    Navigator.push(
+      context,
+      FastRoute(builder: (_) => const MemoryPage()),
     );
   }
+
+  /// 获取近7天每日新增记忆数
+  List<_DailyMemoryPoint> _getDailyMemoryTrend(List<MemoryEntry> memories) {
+    final result = <_DailyMemoryPoint>[];
+    final today = DateTime.now();
+
+    for (int i = 6; i >= 0; i--) {
+      final date = today.subtract(Duration(days: i));
+      final dateStart = DateTime(date.year, date.month, date.day);
+      final dateEnd = dateStart.add(const Duration(days: 1));
+
+      final count = memories
+          .where(
+            (m) =>
+                !m.createdAt.isBefore(dateStart) &&
+                m.createdAt.isBefore(dateEnd),
+          )
+          .length;
+
+      final label =
+          '${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      result.add(_DailyMemoryPoint(label: label, count: count));
+    }
+
+    return result;
+  }
+
 
   /// 获取记忆最多的 Top 10 会话列表
   List<_TopSessionItem> _getTop10Sessions(AppState state) {
@@ -1407,31 +1498,57 @@ class _MemoryDashboardCard extends StatelessWidget {
     items.sort((a, b) => b.count.compareTo(a.count));
     return items.take(10).toList();
   }
+}
 
-  /// 获取近7天每日新增记忆数
-  List<_DailyMemoryPoint> _getDailyMemoryTrend(List<MemoryEntry> memories) {
-    final result = <_DailyMemoryPoint>[];
-    final today = DateTime.now();
+class _Card extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color color;
+  final Widget? trailing;
+  final Widget child;
 
-    for (int i = 6; i >= 0; i--) {
-      final date = today.subtract(Duration(days: i));
-      final dateStart = DateTime(date.year, date.month, date.day);
-      final dateEnd = dateStart.add(const Duration(days: 1));
+  const _Card({
+    required this.title,
+    required this.icon,
+    required this.color,
+    this.trailing,
+    required this.child,
+  });
 
-      final count = memories
-          .where(
-            (m) =>
-                !m.createdAt.isBefore(dateStart) &&
-                m.createdAt.isBefore(dateEnd),
-          )
-          .length;
-
-      final label =
-          '${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-      result.add(_DailyMemoryPoint(label: label, count: count));
-    }
-
-    return result;
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: cs.onSurface,
+                ),
+              ),
+              const Spacer(),
+              if (trailing != null) trailing!,
+            ],
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
   }
 }
 
@@ -1452,23 +1569,279 @@ class _DailyMemoryPoint {
   _DailyMemoryPoint({required this.label, required this.count});
 }
 
+/// 近7天记忆增长趋势折线图
+class _MemoryTrendPainter extends CustomPainter {
+  final List<_DailyMemoryPoint> data;
+  final Color lineColor;
+  final Color dotColor;
+  final Color textColor;
+  final Color gridColor;
+
+  _MemoryTrendPainter({
+    required this.data,
+    required this.lineColor,
+    required this.dotColor,
+    required this.textColor,
+    required this.gridColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.isEmpty) return;
+
+    final maxVal = data.map((d) => d.count).reduce((a, b) => a > b ? a : b);
+    final chartH = size.height - 22;
+    final stepX = size.width / (data.length - 1);
+
+    final linePaint = Paint()
+      ..color = lineColor
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    final dotPaint = Paint()
+      ..color = dotColor
+      ..style = PaintingStyle.fill;
+
+    final gridPaint = Paint()
+      ..color = gridColor
+      ..strokeWidth = 0.8;
+
+    for (int i = 1; i <= 2; i++) {
+      final y = chartH * (i / 3);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    final points = <Offset>[];
+    for (int i = 0; i < data.length; i++) {
+      final x = i * stepX;
+      final y = maxVal == 0
+          ? chartH
+          : chartH - (data[i].count / maxVal) * (chartH - 12);
+      points.add(Offset(x, y));
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: data[i].label,
+          style: TextStyle(fontSize: 9, color: textColor),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      tp.layout();
+      tp.paint(canvas, Offset(x - tp.width / 2, chartH + 6));
+    }
+
+    final path = Path()..moveTo(points.first.dx, points.first.dy);
+    for (int i = 1; i < points.length; i++) {
+      path.lineTo(points[i].dx, points[i].dy);
+    }
+    canvas.drawPath(path, linePaint);
+
+    for (int i = 0; i < points.length; i++) {
+      canvas.drawCircle(points[i], 3.0, dotPaint);
+
+      if (data[i].count > 0) {
+        final tp = TextPainter(
+          text: TextSpan(
+            text: '${data[i].count}',
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              color: lineColor,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        );
+        tp.layout();
+        tp.paint(canvas, Offset(points[i].dx - tp.width / 2, points[i].dy - 12));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MemoryTrendPainter old) =>
+      old.data != data || old.lineColor != lineColor;
+}
+
+/// 重要性 10 档竖向迷你柱状图：柱顶计数、底部档位标签，峰值档高亮
+class _ImportanceColumnChart extends StatelessWidget {
+  final List<int> bins; // 长度 10，第 i 格为重要性 [i, i+1) 的记忆数
+
+  const _ImportanceColumnChart({required this.bins});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final maxBin = bins.fold<int>(0, (a, b) => math.max(a, b));
+    return SizedBox(
+      height: 116,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < 10; i++)
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Column(
+                  children: [
+                    Text(
+                      '${bins[i]}',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: bins[i] == maxBin && maxBin > 0
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                        color: bins[i] == maxBin && maxBin > 0
+                            ? cs.onSurface
+                            : cs.outline,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: FractionallySizedBox(
+                          heightFactor:
+                              maxBin == 0 ? 0.0 : bins[i] / maxBin,
+                          // Container 无 child 时撑满约束（DecoratedBox 会收缩为 0 不可见）
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: _barColor(cs, i, bins[i] == maxBin),
+                              borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(4),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$i-${i + 1}',
+                      style: TextStyle(
+                        fontSize: 8,
+                        color: cs.outline,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Color _barColor(ColorScheme cs, int tier, bool isPeak) {
+    final base = tier >= 7
+        ? cs.primary
+        : tier >= 4
+            ? const Color(0xFFE7B24F)
+            : cs.outline.withValues(alpha: 0.5);
+    return isPeak ? base : base.withValues(alpha: 0.55);
+  }
+}
+
+/// 原子类型分布：单条堆叠比例条 + 下方图例（色点 + 类型名 + 数量）
+class _AtomTypeStackBar extends StatelessWidget {
+  final List<MapEntry<AtomType, int>> entries; // 已按数量降序
+
+  const _AtomTypeStackBar({required this.entries});
+
+  // 与 app 调色板一致的类型色（factual 用主题主色，见 _colorFor）
+  static const _typeColors = <AtomType, Color>{
+    AtomType.preference: Color(0xFF3DD598),
+    AtomType.relational: Color(0xFFE7B24F),
+    AtomType.episodic: Color(0xFFEF7D6C),
+    AtomType.planned: Color(0xFF9B8FD4),
+  };
+
+  Color _colorFor(AtomType type, ColorScheme cs) =>
+      type == AtomType.factual
+          ? cs.primary
+          : type == AtomType.unknown
+              ? cs.outline
+              : _typeColors[type] ?? cs.secondary;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(7),
+          child: SizedBox(
+            height: 14,
+            // stretch：给分段紧高度约束（无 child 的 ColoredBox 否则高度收缩为 0）
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final e in entries)
+                  Expanded(
+                    flex: e.value,
+                    child: ColoredBox(color: _colorFor(e.key, cs)),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 12,
+          runSpacing: 6,
+          children: [
+            for (final e in entries)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _colorFor(e.key, cs),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${_MemoryDashboardCard._atomTypeLabel(e.key)} ${e.value}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 /// 记忆小指标框
 class _MemoryStatBox extends StatelessWidget {
   final String label;
   final String value;
   final IconData icon;
   final Color color;
+  final VoidCallback? onTap;
 
   const _MemoryStatBox({
     required this.label,
     required this.value,
     required this.icon,
     required this.color,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.08),
@@ -1504,6 +1877,7 @@ class _MemoryStatBox extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -1590,189 +1964,6 @@ class _TopSessionRow extends StatelessWidget {
 }
 
 /// 每日记忆趋势折线/点图绘制器
-class _MemoryTrendPainter extends CustomPainter {
-  final List<_DailyMemoryPoint> data;
-  final Color lineColor;
-  final Color dotColor;
-  final Color textColor;
-  final Color gridColor;
-
-  _MemoryTrendPainter({
-    required this.data,
-    required this.lineColor,
-    required this.dotColor,
-    required this.textColor,
-    required this.gridColor,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (data.isEmpty) return;
-
-    final maxVal = data.map((d) => d.count).reduce((a, b) => a > b ? a : b);
-    final chartH = size.height - 22;
-    final stepX = size.width / (data.length - 1);
-
-    final linePaint = Paint()
-      ..color = lineColor
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
-
-    final dotPaint = Paint()
-      ..color = dotColor
-      ..style = PaintingStyle.fill;
-
-    final gridPaint = Paint()
-      ..color = gridColor
-      ..strokeWidth = 0.8;
-
-    // 画网格背景
-    for (int i = 1; i <= 2; i++) {
-      final y = chartH * (i / 3);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    final points = <Offset>[];
-    for (int i = 0; i < data.length; i++) {
-      final x = i * stepX;
-      final y = maxVal == 0
-          ? chartH
-          : chartH - (data[i].count / maxVal) * (chartH - 12);
-      points.add(Offset(x, y));
-
-      // X 轴日期
-      final tp = TextPainter(
-        text: TextSpan(
-          text: data[i].label,
-          style: TextStyle(fontSize: 9, color: textColor),
-        ),
-        textDirection: TextDirection.ltr,
-      );
-      tp.layout();
-      tp.paint(canvas, Offset(x - tp.width / 2, chartH + 6));
-    }
-
-    // 绘制趋势折线
-    final path = Path()..moveTo(points.first.dx, points.first.dy);
-    for (int i = 1; i < points.length; i++) {
-      path.lineTo(points[i].dx, points[i].dy);
-    }
-    canvas.drawPath(path, linePaint);
-
-    // 绘制数据圆点及数值
-    for (int i = 0; i < points.length; i++) {
-      canvas.drawCircle(points[i], 3.0, dotPaint);
-
-      if (data[i].count > 0) {
-        final tp = TextPainter(
-          text: TextSpan(
-            text: '${data[i].count}',
-            style: TextStyle(
-              fontSize: 9,
-              fontWeight: FontWeight.w700,
-              color: lineColor,
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        );
-        tp.layout();
-        tp.paint(canvas, Offset(points[i].dx - tp.width / 2, points[i].dy - 12));
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _MemoryTrendPainter old) =>
-      old.data != data || old.lineColor != lineColor;
-}
-
-// ──────────────────────────────────────────────
-// 通用组件
-// ──────────────────────────────────────────────
-class _Card extends StatelessWidget {
-  final String title;
-  final IconData icon;
-  final Color color;
-  final Widget? trailing;
-  final Widget child;
-
-  const _Card({
-    required this.title,
-    required this.icon,
-    required this.color,
-    this.trailing,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: cs.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: color, size: 20),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: cs.onSurface,
-                ),
-              ),
-              const Spacer(),
-              if (trailing != null) trailing!,
-            ],
-          ),
-          const SizedBox(height: 14),
-          child,
-        ],
-      ),
-    );
-  }
-}
-
-class _Legend extends StatelessWidget {
-  final Color color;
-  final String label;
-
-  const _Legend({required this.color, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        const SizedBox(width: 5),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Theme.of(context).colorScheme.outline,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;

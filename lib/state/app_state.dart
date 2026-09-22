@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:collection';
 
@@ -13,6 +14,15 @@ import 'package:uuid/uuid.dart';
 import '../models/models.dart';
 import '../services/ai_service.dart';
 import '../services/logger_service.dart';
+import '../services/memory/atom_classifier.dart';
+import '../services/memory/consolidation.dart';
+import '../services/memory/graph_memory.dart';
+import '../services/memory/hybrid_retrieval.dart';
+import '../services/memory/memory_extraction.dart';
+import '../services/memory/memory_lifecycle.dart';
+import '../services/memory/memory_prompts.dart'
+    show buildConsolidationUserPrompt, consolidationSystemPrompt;
+import '../services/memory/memory_recall_format.dart';
 import '../services/segmented_delivery_scheduler.dart';
 import '../services/segmented_splitter.dart';
 import '../services/storage_service.dart';
@@ -114,16 +124,41 @@ String buildStickerPromptSection({
   return buf.toString();
 }
 
+/// 后台 LLM 任务（记忆提取/整理合并）执行器；生产走 [AiService.runTask]，
+/// 测试注入以模拟模型输出。
+@visibleForTesting
+typedef MemoryTaskRunner = Future<(String, int, int)> Function({
+  required ApiConfig config,
+  required String system,
+  required String user,
+  String? model,
+});
+
+/// 嵌入向量请求执行器；生产走 [AiService.getEmbedding]，测试注入假向量。
+@visibleForTesting
+typedef MemoryEmbedder = Future<EmbeddingResult> Function({
+  required String baseUrl,
+  required String apiKey,
+  required String model,
+  required String text,
+});
+
 /// 全局应用状态
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
   final StorageService _storage;
   final SegmentedDeliveryScheduler _segmentedDeliveryScheduler;
+  final MemoryTaskRunner _runMemoryTask;
+  final MemoryEmbedder _fetchEmbedding;
 
   AppState(
     this._storage, {
     SegmentedDeliveryScheduler? segmentedDeliveryScheduler,
+    @visibleForTesting MemoryTaskRunner? taskRunner,
+    @visibleForTesting MemoryEmbedder? embedder,
   }) : _segmentedDeliveryScheduler =
-           segmentedDeliveryScheduler ?? SegmentedDeliveryScheduler() {
+           segmentedDeliveryScheduler ?? SegmentedDeliveryScheduler(),
+       _runMemoryTask = taskRunner ?? AiService.runTask,
+       _fetchEmbedding = embedder ?? AiService.getEmbedding {
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -164,6 +199,24 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _memoriesWrite = Future.value();
   final Set<String> _summariesInFlight = {};
 
+  // ---- 记忆子系统（移植 LivingMemory）----
+  /// 记忆原子（key_facts 拆出的细粒度事实单元）
+  List<MemoryAtom> memoryAtoms = [];
+
+  /// 图谱记忆（节点/边/条目，内存索引 + JSON 快照持久化）
+  GraphMemoryStore graphStore = GraphMemoryStore();
+
+  /// 反思状态：每会话已总结到的消息下标 + 失败重试区间
+  Map<String, Map<String, dynamic>> memoryReflectionState = {};
+
+  /// 维护状态：上次衰减日期 / 上次整理时间
+  Map<String, dynamic> memoryMaintenanceState = {};
+
+  bool _consolidationInFlight = false;
+  Timer? _memoryAuxPersistTimer;
+  bool _memoryAuxPersistQueued = false;
+  Future<void> _memoryAuxWrite = Future.value();
+
   /// 打断当前生成
   void stopGeneration() {
     log.i('chat', '请求停止生成（取消回复循环）');
@@ -198,9 +251,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _sessionsPersistTimer?.cancel();
     _memoriesPersistTimer?.cancel();
     _tokenPersistTimer?.cancel();
+    _memoryAuxPersistTimer?.cancel();
     _flushSessionsPersist();
     _flushMemoriesPersist();
     _flushTokenPersist();
+    _flushMemoryAuxPersist();
     super.dispose();
   }
 
@@ -212,10 +267,41 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _sessionsPersistTimer?.cancel();
       _memoriesPersistTimer?.cancel();
       _tokenPersistTimer?.cancel();
+      _memoryAuxPersistTimer?.cancel();
       _flushSessionsPersist();
       _flushMemoriesPersist();
       _flushTokenPersist();
+      _flushMemoryAuxPersist();
+    } else if (state == AppLifecycleState.resumed) {
+      // 从后台恢复时补跑记忆维护（衰减/清扫/清理）
+      runMemoryMaintenance();
     }
+  }
+
+  /// 记忆辅助数据（原子/图谱/反思状态/维护状态）的防抖持久化
+  void _scheduleMemoryAuxPersist() {
+    _memoryAuxPersistQueued = true;
+    if (_memoryAuxPersistTimer?.isActive == true) return;
+    _memoryAuxPersistTimer = Timer(const Duration(milliseconds: 600), () {
+      _memoryAuxPersistTimer = null;
+      _flushMemoryAuxPersist();
+    });
+  }
+
+  void _flushMemoryAuxPersist() {
+    if (!_memoryAuxPersistQueued) return;
+    _memoryAuxPersistQueued = false;
+    _memoryAuxWrite = _memoryAuxWrite
+        .catchError((_) {})
+        .then((_) async {
+          await _storage.saveMemoryAtoms(memoryAtoms);
+          await _storage.saveMemoryReflectionState(memoryReflectionState);
+          await _storage.saveMemoryMaintenanceState(memoryMaintenanceState);
+          await _storage.saveMemoryGraph(graphStore.toJson());
+        })
+        .catchError((Object error) {
+          log.e('storage', '保存记忆辅助数据失败', error: error);
+        });
   }
 
   void _scheduleSessionsPersist({bool immediate = false}) {
@@ -331,8 +417,6 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   // 会话空闲检测
   Timer? _idleTimer;
-  // 记录每个会话上次总结时的对话轮次，用于判断是否需要再次总结
-  final Map<String, int> _lastSummarizedRounds = {};
 
   // 消息合并防抖计时器
   Timer? _mergeTimer;
@@ -865,7 +949,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  /// 重置会话空闲计时器（5 分钟无回复则触发总结）
+  /// 重置会话空闲计时器（5 分钟无回复则触发记忆提取）
   void _resetIdleTimer(ChatSession session) {
     _idleTimer?.cancel();
     if (!memorySettings.autoSummaryEnabled) return;
@@ -874,251 +958,553 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  /// 检查并触发对话总结
+  /// 参与提取的消息：用户/助手、非空、非流式、非表情包占位
+  bool _isExtractionEligible(ChatMessage m) {
+    if (m.role != 'user' && m.role != 'assistant') return false;
+    if (m.isStreaming) return false;
+    if (m.stickerId != null) return false;
+    return stripStickerInternalMarkers(m.content).trim().isNotEmpty;
+  }
+
+  /// 检查并触发记忆提取（滑窗机制，移植 LivingMemory memory_reflection）。
+  ///
+  /// 触发条件：未总结消息数 / 2 ≥ summaryThreshold（一轮 = 用户+助手两条）。
+  /// 失败区间记入 pending，重试最多 3 次，成功后推进 lastSummarizedIndex。
+  @visibleForTesting
+  Future<void> debugCheckAndSummarize(ChatSession session) =>
+      _checkAndSummarize(session);
+
   Future<void> _checkAndSummarize(ChatSession session) async {
-    if (!memorySettings.autoSummaryEnabled ||
-        _summariesInFlight.contains(session.id)) {
-      return;
+    // 状态钳位先行：即使无 API / 未开启自动总结，也保证游标与消息数一致
+    final eligible0 =
+        session.messages.where(_isExtractionEligible).toList(growable: false);
+    final state0 = memoryReflectionState[session.id];
+    if (state0 != null) {
+      final idx = (state0['lastSummarizedIndex'] as num?)?.toInt() ?? 0;
+      if (idx > eligible0.length) {
+        state0['lastSummarizedIndex'] = eligible0.length;
+        _scheduleMemoryAuxPersist();
+      }
     }
-    // 嵌入未配置时禁用记忆系统
-    if (!embeddingApiConfig.isValid) return;
 
-    // 统计对话轮数（user + assistant 算一轮）
-    final userMsgs = session.messages.where((m) => m.role == 'user').length;
-    final assistantMsgs = session.messages
-        .where((m) => m.role == 'assistant')
-        .length;
-    final rounds = userMsgs < assistantMsgs ? userMsgs : assistantMsgs;
+    if (!memorySettings.autoSummaryEnabled) return;
+    if (_summariesInFlight.contains(session.id)) return;
+    if (activeApi == null) return; // 提取需要对话 LLM（嵌入不再是硬门槛）
 
-    if (rounds < memorySettings.summaryThreshold) return;
+    final eligible = eligible0;
+    final total = eligible.length;
 
-    // 距上次总结的轮次增量需达到阈值才再次总结
-    final lastSummarized = _lastSummarizedRounds[session.id] ?? 0;
-    if (rounds - lastSummarized < memorySettings.summaryThreshold) return;
+    final state =
+        memoryReflectionState.putIfAbsent(session.id, () => {});
+    var lastIndex = (state['lastSummarizedIndex'] as num?)?.toInt() ?? 0;
+    state['lastSummarizedIndex'] = lastIndex;
+
+    final unsummarizedRounds = (total - lastIndex) ~/ 2;
+    if (unsummarizedRounds < memorySettings.summaryThreshold) return;
+
+    // 失败重试：合并 pending 区间；超过 3 次放弃并推进
+    final pending = state['pending'] as Map<String, dynamic>?;
+    var start = lastIndex;
+    var retry = 0;
+    if (pending != null) {
+      retry = (pending['retryCount'] as num?)?.toInt() ?? 0;
+      if (retry >= 3) {
+        state
+          ..remove('pending')
+          ..['lastSummarizedIndex'] = total;
+        _scheduleMemoryAuxPersist();
+        log.w('memory', '总结区间连续失败 3 次，放弃重试');
+        return;
+      }
+      start = (pending['startIndex'] as num?)?.toInt() ?? lastIndex;
+    }
+    final end = total;
+    if (end - start < 2) return;
 
     log.i(
       'memory',
-      '触发自动总结：会话=${session.id.substring(0, 8)} '
-          '轮次=$rounds 上次=$lastSummarized 阈值=${memorySettings.summaryThreshold}',
+      '触发记忆提取：会话=${session.id.substring(0, 8)} '
+          '窗口=[$start, $end) 重试=$retry '
+          '阈值=${memorySettings.summaryThreshold}',
     );
     _summariesInFlight.add(session.id);
     try {
-      await _summarizeConversation(session);
+      await _reflectSession(
+        session,
+        eligible.sublist(start, end),
+        startIndex: start,
+        endIndex: end,
+        retryCount: retry,
+      );
     } finally {
       _summariesInFlight.remove(session.id);
     }
   }
 
-  /// 总结对话并保存为记忆
-  Future<void> _summarizeConversation(ChatSession session) async {
+  /// 执行一轮记忆提取：格式化窗口 → LLM 结构化提取 → 记忆+原子+图谱 → 推进游标
+  Future<void> _reflectSession(
+    ChatSession session,
+    List<ChatMessage> window, {
+    required int startIndex,
+    required int endIndex,
+    required int retryCount,
+  }) async {
     final api = activeApi;
     if (api == null) return;
-
     final isGroup = session.isGroup;
     final persona = isGroup ? null : personaOf(session);
 
     try {
-      // 构建对话文本
-      final conversationMessages = session.messages
-          .where((m) => m.role == 'user' || m.role == 'assistant')
-          .map((m) {
-            if (m.role == 'assistant' && isGroup && m.speakerId != null) {
-              final sp = personaById(m.speakerId);
-              return {
-                'role': 'assistant',
-                'content': '[${sp?.name ?? 'AI'}] ${m.content}',
-              };
-            }
-            return {'role': m.role, 'content': m.content};
-          })
-          .toList();
+      // 1. 格式化为提取输入
+      final botName = isGroup ? (groupOf(session)?.name ?? '群聊') : (persona?.name ?? 'AI');
+      final extractionMessages = window.map((m) {
+        if (m.role == 'assistant') {
+          final sp = m.speakerId != null ? personaById(m.speakerId) : null;
+          return ExtractionMessage(
+            role: 'assistant',
+            content: stripStickerInternalMarkers(m.content).trim(),
+            timestamp: m.timestamp,
+            speakerId: sp?.id ?? m.speakerId,
+            speakerName: sp?.name ?? botName,
+            isBot: true,
+          );
+        }
+        return ExtractionMessage(
+          role: 'user',
+          content: stripStickerInternalMarkers(m.content).trim(),
+          timestamp: m.timestamp,
+          speakerId: userProfile.name,
+          speakerName: userProfile.name,
+        );
+      }).toList();
 
-      if (conversationMessages.length < 2) return;
+      final conversationText = formatConversationForExtraction(
+        extractionMessages,
+        botDisplayName: botName,
+      );
+      final currentDate =
+          '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')} ${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}';
 
-      final (
-        summary,
-        importance,
-        summaryInputTokens,
-        summaryOutputTokens,
-      ) = await AiService.summarizeConversation(
+      // 2. LLM 结构化提取（带重试）
+      final (raw, inputTokens, outputTokens) = await _runMemoryTask(
         config: api,
-        messages: conversationMessages,
-        personaName: persona?.name,
+        system: buildExtractionSystemPrompt(
+          currentDate: currentDate,
+          personaPrompt: persona?.buildSystemPrompt(),
+        ),
+        user: buildExtractionUserPrompt(
+          conversationText: conversationText,
+          currentDate: currentDate,
+          isGroup: isGroup,
+        ),
         model: memorySettings.summaryModel.isNotEmpty
             ? memorySettings.summaryModel
             : null,
       );
-
       await addTokenUsage(
-        inputTokens: summaryInputTokens,
-        outputTokens: summaryOutputTokens,
+        inputTokens: inputTokens,
+        outputTokens: outputTokens,
       );
 
-      if (summary.isEmpty) {
-        log.w('memory', '总结结果为空');
-        return;
-      }
+      final extraction = parseExtractionResponse(raw, isGroup: isGroup);
 
-      // 保存总结记忆（包含重要性评分）
-      final memoryPersonaId = isGroup ? null : persona?.id;
+      // 3. 构建记忆条目（v2 元数据）
+      final timeInfo = memorySettings.includeSourceTimeTags
+          ? buildSourceTimeTags(extractionMessages)
+          : (timeTags: const <String>[], sourceTimeLabel: null);
+      final richContent = extraction.keyFacts.isEmpty
+          ? extraction.summary
+          : '${extraction.summary} | ${extraction.keyFacts.join('；')}';
+
       final memory = MemoryEntry(
         id: _uuid.v4(),
-        content: summary,
+        content: richContent,
         createdAt: DateTime.now(),
         source: 'summary',
-        personaId: memoryPersonaId,
+        personaId: isGroup ? null : persona?.id,
         sessionId: session.id,
-        importance: importance,
+        importance: extraction.importance,
+        personaSummary: extraction.summary,
+        canonicalSummary: extraction.canonicalSummary,
+        topics: extraction.topics,
+        keyFacts: extraction.keyFacts,
+        participants: extraction.participants,
+        sentiment: extraction.sentiment,
+        interactionType: isGroup ? 'group_chat' : 'private_chat',
+        summaryQuality: extraction.quality,
+        timeTags: timeInfo.timeTags,
+        sourceTimeLabel: timeInfo.sourceTimeLabel,
       );
+
+      // 4. 分类记忆原子
+      List<MemoryAtom> atoms = const [];
+      if (memorySettings.atomEnabled && extraction.keyFacts.isNotEmpty) {
+        atoms = classifyFacts(
+          keyFacts: extraction.keyFacts,
+          topics: extraction.topics,
+          participants: extraction.participants,
+          parentMemoryId: memory.id,
+          parentImportance: extraction.importance,
+          sessionId: session.id,
+          personaId: memory.personaId,
+        );
+        memoryAtoms.addAll(atoms);
+        memory.atomTypes = atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+      }
+
       memories.insert(0, memory);
       notifyListeners();
       _scheduleMemoriesPersist();
 
       log.i(
         'memory',
-        '已生成总结记忆：重要性=$importance '
-            '长度=${summary.length} 字符',
+        '已生成记忆：重要性=${extraction.importance} 质量=${extraction.quality} '
+            '事实=${extraction.keyFacts.length} 原子=${atoms.length}',
       );
 
-      // 计算并存储嵌入向量
-      try {
-        final result = await AiService.getEmbedding(
-          baseUrl: embeddingApiConfig.baseUrl,
-          apiKey: embeddingApiConfig.apiKey,
-          model: embeddingApiConfig.model,
-          text: summary,
-        );
-        memory.embedding = result.embedding;
-        _scheduleMemoriesPersist();
-        await addTokenUsage(inputTokens: result.inputTokens);
-        log.d('memory', '总结记忆嵌入计算完成：维度=${result.embedding.length}');
-      } catch (e) {
-        log.w('memory', '总结记忆嵌入计算失败', error: e);
+      // 5. 嵌入（best-effort，未配置时跳过）
+      _computeEmbedding(memory);
+
+      // 6. 图谱索引
+      if (memorySettings.graphEnabled &&
+          memorySettings.atomEnabled &&
+          atoms.isNotEmpty) {
+        graphStore.indexMemory(memory, atoms);
+        _scheduleMemoryAuxPersist();
       }
 
-      // 记录已总结的轮次，用于判断下次总结时机
-      final userMsgs = session.messages.where((m) => m.role == 'user').length;
-      final assistantMsgs = session.messages
-          .where((m) => m.role == 'assistant')
-          .length;
-      final rounds = userMsgs < assistantMsgs ? userMsgs : assistantMsgs;
-      _lastSummarizedRounds[session.id] = rounds;
+      // 7. 推进游标
+      final state =
+          memoryReflectionState.putIfAbsent(session.id, () => {});
+      state
+        ..remove('pending')
+        ..['lastSummarizedIndex'] = endIndex;
+      _scheduleMemoryAuxPersist();
+
+      // 8. 视情况调度整理合并（后台，带冷却）
+      _maybeRunConsolidation(trigger: 'reflection');
     } catch (e, s) {
-      log.e('memory', '记忆总结失败', error: e, stackTrace: s);
+      // 记录失败区间，下次重试
+      final state =
+          memoryReflectionState.putIfAbsent(session.id, () => {});
+      state['pending'] = {
+        'startIndex': startIndex,
+        'endIndex': endIndex,
+        'retryCount': retryCount + 1,
+      };
+      _scheduleMemoryAuxPersist();
+      log.e('memory', '记忆提取失败（已记录待重试区间）', error: e, stackTrace: s);
     }
   }
 
-  /// 检索与当前消息最相关的记忆
+  /// 运行记忆维护：每日衰减补齐 → 原子清扫 → 旧记忆清理
+  Future<void> runMemoryMaintenance() async {
+    final now = DateTime.now();
+    var changed = false;
+
+    // 1. 文档衰减（漏跑补齐）
+    if (memorySettings.decayRate > 0) {
+      DateTime? lastRun;
+      final raw = memoryMaintenanceState['lastDecayDate'];
+      if (raw is String) lastRun = DateTime.tryParse(raw);
+      final report = applyDailyDecay(
+        memories,
+        decayRate: memorySettings.decayRate,
+        protectionThreshold: memorySettings.protectionThreshold,
+        maxAccessBoost: memorySettings.maxAccessBoost,
+        accessWindowDays: memorySettings.accessDecayWindowDays,
+        accessCountMultiplier: memorySettings.accessCountDecayMultiplier,
+        lastRunDate: lastRun,
+        now: now,
+      );
+      if (report.processedCount > 0) {
+        log.i(
+          'memory',
+          '每日衰减完成：处理 ${report.processedCount} 条'
+              '（间隔自 $lastRun）',
+        );
+        changed = true;
+      }
+      memoryMaintenanceState['lastDecayDate'] = now.toIso8601String();
+    }
+
+    // 2. 原子三段清扫
+    if (memorySettings.atomEnabled && memoryAtoms.isNotEmpty) {
+      final report = sweepAtoms(
+        memoryAtoms,
+        forgetDelayDays: memorySettings.atomForgetDelayDays,
+        purgeDelayDays: memorySettings.atomPurgeDelayDays,
+        now: now,
+      );
+      if (report.expiredCount + report.forgottenCount + report.purgedCount > 0) {
+        log.i(
+          'memory',
+          '原子清扫：过期 ${report.expiredCount}、'
+              '遗忘 ${report.forgottenCount}、'
+              '删除 ${report.purgedCount}',
+        );
+        changed = true;
+      }
+    }
+
+    // 3. 旧低价值记忆清理
+    if (memorySettings.autoCleanupEnabled) {
+      final candidates = findCleanupCandidates(
+        memories,
+        daysThreshold: memorySettings.cleanupDaysThreshold,
+        importanceThreshold: memorySettings.cleanupImportanceThreshold,
+        now: now,
+      );
+      if (candidates.isNotEmpty) {
+        if (memorySettings.autoArchiveEnabled) {
+          for (final m in candidates) {
+            archiveMemory(m, now: now);
+            log.d('memory', '归档过期记忆：${m.id.substring(0, 8)}');
+          }
+          log.i('memory', '清理完成：归档 ${candidates.length} 条旧记忆');
+        } else {
+          for (final m in candidates) {
+            _removeMemoryInternal(m.id);
+          }
+          log.i('memory', '清理完成：删除 ${candidates.length} 条旧记忆');
+        }
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      notifyListeners();
+      _scheduleMemoriesPersist();
+      _scheduleMemoryAuxPersist();
+    }
+  }
+
+  /// 记忆整理合并（trigger: reflection / manual）。
+  ///
+  /// 整理候选 → 会话/语义分组 → LLM 合并 → 溯源归档。
+  Future<void> _maybeRunConsolidation({required String trigger}) async {
+    if (!memorySettings.consolidationEnabled) return;
+    if (_consolidationInFlight) return;
+    // 冷却（手动触发不受限）
+    if (trigger != 'manual') {
+      final lastAt = memoryMaintenanceState['lastConsolidationAt'];
+      if (lastAt is String) {
+        final last = DateTime.tryParse(lastAt);
+        if (last != null) {
+          final elapsed =
+              DateTime.now().difference(last).inMilliseconds / 3600000.0;
+          if (elapsed < memorySettings.consolidationMinIntervalHours) return;
+        }
+      }
+    }
+    final api = activeApi;
+    if (api == null) return;
+
+    _consolidationInFlight = true;
+    try {
+      final config = ConsolidationConfig.fromSettings(memorySettings);
+      final candidates = findConsolidationCandidates(memories, config: config);
+      if (candidates.isEmpty) return;
+      final groups =
+          buildConsolidationGroups(candidates, config: config);
+      if (groups.isEmpty) return;
+
+      var mergedCount = 0;
+      for (final group in groups.take(config.maxGroupsPerRun)) {
+        final items = buildMergeItems(group);
+        try {
+          final (raw, inTokens, outTokens) = await _runMemoryTask(
+            config: api,
+            system: consolidationSystemPrompt,
+            user: buildConsolidationUserPrompt(items),
+            model: memorySettings.summaryModel.isNotEmpty
+                ? memorySettings.summaryModel
+                : null,
+          );
+          await addTokenUsage(
+            inputTokens: inTokens,
+            outputTokens: outTokens,
+          );
+          final merged = parseMergeResponse(raw);
+          if (merged == null) {
+            log.w('memory', '整理合并输出解析失败，跳过该组');
+            continue;
+          }
+
+          final first = group.first;
+          final inheritScope = config.granularity == 'session';
+          final newMemory = MemoryEntry(
+            id: _uuid.v4(),
+            content: merged.summary,
+            createdAt: DateTime.now(),
+            source: 'summary',
+            personaId: inheritScope ? first.personaId : null,
+            sessionId: inheritScope ? first.sessionId : null,
+            importance: merged.importance,
+            personaSummary: merged.summary,
+            canonicalSummary: merged.summary,
+            topics: merged.topics,
+            keyFacts: merged.keyFacts,
+            participants: first.participants,
+            sentiment: first.sentiment,
+            interactionType: first.interactionType,
+            consolidatedFrom: group.map((m) => m.id).toList(),
+          );
+          memories.insert(0, newMemory);
+
+          // 原件归档或删除
+          for (final old in group) {
+            if (config.keepOriginal == 'delete') {
+              _removeMemoryInternal(old.id);
+            } else {
+              archiveMemory(old);
+            }
+          }
+
+          // 嵌入 + 原子 + 图谱
+          _computeEmbedding(newMemory);
+          if (memorySettings.atomEnabled && merged.keyFacts.isNotEmpty) {
+            final atoms = classifyFacts(
+              keyFacts: merged.keyFacts,
+              topics: merged.topics,
+              participants: const [],
+              parentMemoryId: newMemory.id,
+              parentImportance: merged.importance,
+              sessionId: newMemory.sessionId,
+              personaId: newMemory.personaId,
+            );
+            memoryAtoms.addAll(atoms);
+            newMemory.atomTypes =
+                atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+            if (memorySettings.graphEnabled && atoms.isNotEmpty) {
+              graphStore.indexMemory(newMemory, atoms);
+            }
+          }
+          mergedCount++;
+        } catch (e) {
+          log.w('memory', '整理合并一组失败', error: e);
+        }
+      }
+
+      if (mergedCount > 0) {
+        memoryMaintenanceState['lastConsolidationAt'] =
+            DateTime.now().toIso8601String();
+        log.i('memory', '整理合并完成：合并 $mergedCount 组');
+        notifyListeners();
+        _scheduleMemoriesPersist();
+        _scheduleMemoryAuxPersist();
+      }
+    } finally {
+      _consolidationInFlight = false;
+    }
+  }
+
+  /// 手动触发整理合并（设置页按钮）
+  Future<void> runConsolidationManually() =>
+      _maybeRunConsolidation(trigger: 'manual');
+
+  /// 检索与当前消息最相关的记忆（混合检索：BM25+向量+图谱+原子）
   Future<List<MemoryEntry>> _retrieveRelevantMemories(
     String queryText,
     String? personaId,
     String sessionId,
   ) async {
-    // 按人格和会话过滤
-    final filtered = memories.where((m) {
-      final personaMatches = m.personaId == null || m.personaId == personaId;
-      if (!personaMatches) return false;
-      if (!memorySettings.useSessionFiltering) return true;
-      return m.sessionId == null || m.sessionId == sessionId;
-    }).toList();
+    final scope = _memoryScope(personaId: personaId, sessionId: sessionId);
 
-    if (filtered.isEmpty) {
-      log.d('memory', '记忆检索：过滤后无可候选记忆');
-      return [];
-    }
-
-    // 嵌入检索（嵌入配置有效时启用）
+    // 查询嵌入（未配置或失败时退化为纯关键词检索）
+    List<double>? queryEmbedding;
     if (embeddingApiConfig.isValid) {
       try {
-        final queryResult = await AiService.getEmbedding(
+        final result = await _fetchEmbedding(
           baseUrl: embeddingApiConfig.baseUrl,
           apiKey: embeddingApiConfig.apiKey,
           model: embeddingApiConfig.model,
           text: queryText,
         );
-        await addTokenUsage(inputTokens: queryResult.inputTokens);
-
-        // 计算相似度并应用时间衰减后排序
-        final queryEmbedding = queryResult.embedding;
-        final scored = <MapEntry<MemoryEntry, double>>[];
-        for (final m in filtered) {
-          if (m.embedding != null &&
-              m.embedding!.length == queryEmbedding.length) {
-            final rawScore = _cosineSimilarity(queryEmbedding, m.embedding!);
-            // 综合相似度、时间衰减（含重要性保护与访问强化）、重要性加权
-            final effectiveScore =
-                rawScore *
-                _decayFactor(m.createdAt, m.importance, m.accessCount) *
-                (0.5 + 0.5 * m.importance);
-            scored.add(MapEntry(m, effectiveScore));
-          }
-        }
-
-        if (scored.isNotEmpty) {
-          scored.sort((a, b) => b.value.compareTo(a.value));
-          // 增加被检索记忆的访问次数（用于访问强化）
-          final result = scored
-              .take(memorySettings.retrievalCount)
-              .map((e) => e.key)
-              .toList();
-          for (final m in result) {
-            m.accessCount = (m.accessCount + 1).clamp(
-              0,
-              memorySettings.maxAccessBoost,
-            );
-          }
-          _scheduleMemoriesPersist();
-          log.d(
-            'memory',
-            '嵌入检索命中：候选=${filtered.length} '
-                '可评分=${scored.length} 返回=${result.length}',
-          );
-          return result;
-        }
+        queryEmbedding = result.embedding;
+        await addTokenUsage(inputTokens: result.inputTokens);
       } catch (e) {
-        log.w('memory', '嵌入检索失败，回退到最近记忆', error: e);
+        log.w('memory', '查询嵌入失败，本次退化为关键词检索', error: e);
       }
     }
 
-    // 回退：返回最近 N 条
-    filtered.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final atomIndex = _atomIndexByMemory();
+    final candidates = memories
+        .map((m) => RetrievalMemory(
+              entry: m,
+              atoms: atomIndex[m.id] ?? const [],
+            ))
+        .toList();
+
+    final results = await searchMemories(
+      query: queryText,
+      candidates: candidates,
+      scope: scope,
+      config: RetrievalConfig.fromSettings(memorySettings),
+      graphStore: memorySettings.graphEnabled ? graphStore : null,
+      queryEmbedding: queryEmbedding,
+    );
+
+    if (results.isEmpty) {
+      log.d('memory', '混合检索无命中：候选=${candidates.length}');
+      return const [];
+    }
+
+    // 访问强化（lastAccessTime / accessCount / 原子 lastAccessedAt）
+    for (final r in results) {
+      reinforceOnRetrieval(
+        r.entry,
+        r.memory.atoms,
+        maxAccessBoost: memorySettings.maxAccessBoost,
+      );
+    }
+    _scheduleMemoriesPersist();
+    _scheduleMemoryAuxPersist();
     log.d(
       'memory',
-      '回退检索：返回最近 ${filtered.take(memorySettings.retrievalCount).length} 条',
+      '混合检索命中：候选=${candidates.length} '
+          '返回=${results.length} '
+          '最高分=${results.first.finalScore.toStringAsFixed(3)}',
     );
-    return filtered.take(memorySettings.retrievalCount).toList();
+    return results.map((r) => r.entry).toList();
   }
 
-  /// 计算记忆的时间衰减因子：(1 - decayRate) ^ 天数
-  /// - decayRate 为 0 时返回 1（不衰减）
-  /// - importance 达到 protectionThreshold 的记忆不衰减
-  /// - accessCount 达到 maxAccessBoost 时获得最大衰减保护（衰减率减半）
-  double _decayFactor(DateTime createdAt, double importance, int accessCount) {
-    final rate = memorySettings.decayRate;
-    if (rate <= 0) return 1.0;
-    // 重要记忆保护：达到保护阈值的不衰减
-    if (importance >= memorySettings.protectionThreshold) return 1.0;
-    final days = DateTime.now().difference(createdAt).inDays;
-    if (days <= 0) return 1.0;
-    // 访问强化：达到上限时衰减率减半，未达上限时按比例减弱
-    final boost = memorySettings.maxAccessBoost > 0
-        ? accessCount / memorySettings.maxAccessBoost
-        : 0.0;
-    final effectiveRate = rate * (1 - 0.5 * boost.clamp(0.0, 1.0));
-    return pow(1 - effectiveRate, days).toDouble();
+  /// 按当前隔离模式构造检索范围。
+  /// session：会话 + 人物；persona：只按人物，跨会话共享；global：全部共享。
+  RetrievalScope _memoryScope({
+    required String? personaId,
+    required String sessionId,
+  }) {
+    final mode = memorySettings.memoryScopeMode;
+    return RetrievalScope(
+      sessionId: sessionId,
+      personaId: mode == 'global' ? null : personaId,
+      sessionFiltering: mode == 'session',
+      strictPersona: mode == 'persona',
+    );
   }
 
-  /// 余弦相似度
-  static double _cosineSimilarity(List<double> a, List<double> b) {
-    if (a.length != b.length) return 0;
-    double dot = 0, magA = 0, magB = 0;
-    for (int i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      magA += a[i] * a[i];
-      magB += b[i] * b[i];
+  /// 某条记忆的原子列表
+  List<MemoryAtom> _atomsOf(String memoryId) => memoryAtoms
+      .where((a) => a.parentMemoryId == memoryId)
+      .toList(growable: false);
+
+  /// 检索入口（测试用）：无嵌入配置时应走关键词/图谱路径正常命中
+  @visibleForTesting
+  Future<List<MemoryEntry>> debugRetrieveRelevantMemories(
+    String queryText,
+    String? personaId,
+    String sessionId,
+  ) =>
+      _retrieveRelevantMemories(queryText, personaId, sessionId);
+
+  /// 按父记忆分组的原子索引（每次检索构建一次，避免 O(n×m) 重复扫描）
+  Map<String, List<MemoryAtom>> _atomIndexByMemory() {
+    final index = <String, List<MemoryAtom>>{};
+    for (final a in memoryAtoms) {
+      (index[a.parentMemoryId] ??= []).add(a);
     }
-    if (magA == 0 || magB == 0) return 0;
-    return dot / (sqrt(magA) * sqrt(magB));
+    return index;
   }
 
   ApiConfig? get activeApi {
@@ -1238,6 +1624,23 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     activePersonaId = _storage.activePersonaId;
     customTools = _storage.loadTools();
     memories = _storage.loadMemories();
+    memoryAtoms = _storage.loadMemoryAtoms();
+    memoryReflectionState = _storage.loadMemoryReflectionState();
+    memoryMaintenanceState = _storage.loadMemoryMaintenanceState();
+    graphStore = GraphMemoryStore.fromJson(
+      _storage.loadMemoryGraph() ?? const {},
+    );
+    // 一致性：清理指向已删除记忆的孤儿原子
+    final validIds = memories.map((m) => m.id).toSet();
+    final beforeAtoms = memoryAtoms.length;
+    memoryAtoms = pruneOrphanAtoms(memoryAtoms, validIds);
+    if (memoryAtoms.length != beforeAtoms) {
+      log.w(
+        'memory',
+        '清理孤儿原子：${beforeAtoms - memoryAtoms.length} 个'
+            '（父记忆已删除）',
+      );
+    }
     sessions = _storage.loadSessions();
     groupChats = _storage.loadGroupChats();
     stickers = _storage.loadStickerItems();
@@ -1266,7 +1669,25 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       assistantOutputMode == AssistantOutputMode.streaming,
     );
     await _storage.saveSegmentedSendSettings(segmentedSendSettings);
-    memorySettings = _storage.loadMemorySettings();
+    var settings = _storage.loadMemorySettings();
+    // 一次性迁移：总结轮数默认 10 → 20（自定义过其他值的不动）
+    if (!_storage.summaryThresholdMigrated) {
+      if (settings.summaryThreshold == 10) {
+        settings = settings.copyWith(summaryThreshold: 20);
+      }
+      await _storage.markSummaryThresholdMigrated();
+    }
+    memorySettings = settings.copyWith(
+      // 已从设置页移除的选项固定为原版默认行为，忽略旧持久化值：
+      // 原子/图谱/时间标签恒开、最近保留位 2、不过滤类型、整理按会话分组+归档原件
+      atomEnabled: true,
+      graphEnabled: true,
+      includeSourceTimeTags: true,
+      memoryTypeFilter: 'all',
+      recentMemoryCount: 2,
+      consolidationGranularity: 'session',
+      consolidationKeepOriginal: 'archive',
+    );
     tokenUsage = _storage.loadTokenUsage();
     final dailyRecords = _storage.loadTokenDailyRecords();
     // 迁移：如果累计有数据但按天记录为空，把累计值作为今天的初始数据
@@ -1303,6 +1724,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
     // 记录本次启动
     await recordAppLaunch();
+
+    // 启动时补跑记忆维护（衰减/原子清扫/旧记忆清理）
+    await runMemoryMaintenance();
   }
 
   // ---------- API 配置 ----------
@@ -1370,6 +1794,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final name = personas.where((p) => p.id == id).firstOrNull?.name ?? id;
     personas.removeWhere((p) => p.id == id);
     if (activePersonaId == id) activePersonaId = null;
+    // 级联清理该人物的记忆、原子与图谱痕迹（与 UI 确认文案一致）
+    final memoryIds =
+        memories.where((m) => m.personaId == id).map((m) => m.id).toList();
+    for (final memoryId in memoryIds) {
+      _removeMemoryInternal(memoryId);
+    }
+    if (memoryIds.isNotEmpty) {
+      log.i(
+        'memory',
+        '删除人格「$name」：级联清理 ${memoryIds.length} 条记忆'
+            '及其原子与图谱痕迹',
+      );
+      _scheduleMemoriesPersist();
+      _scheduleMemoryAuxPersist();
+    }
     await _storage.savePersonas(personas);
     await _storage.setActivePersonaId(activePersonaId);
     log.i('persona', '删除人格：$name');
@@ -1430,14 +1869,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   ];
 
   // ---------- 记忆 ----------
-  Future<void> addMemory(
+  Future<MemoryEntry?> addMemory(
     String content, {
     String source = 'manual',
     String? personaId,
     String? sessionId,
   }) async {
     final normalized = content.trim();
-    if (normalized.isEmpty) return;
+    if (normalized.isEmpty) return null;
     final memory = MemoryEntry(
       id: _uuid.v4(),
       content: normalized,
@@ -1455,8 +1894,31 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     _scheduleMemoriesPersist();
 
+    // 手动/工具记忆也参与原子分类与图谱（无 keyFacts 时以整条内容作为一个事实）
+    if (memorySettings.atomEnabled) {
+      final atoms = classifyFacts(
+        keyFacts: [normalized],
+        topics: const [],
+        participants: const [],
+        parentMemoryId: memory.id,
+        parentImportance: memory.importance,
+        sessionId: sessionId,
+        personaId: personaId,
+      );
+      if (atoms.isNotEmpty) {
+        memoryAtoms.addAll(atoms);
+        memory.atomTypes =
+            atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+        if (memorySettings.graphEnabled) {
+          graphStore.indexMemory(memory, atoms);
+        }
+        _scheduleMemoryAuxPersist();
+      }
+    }
+
     // 后台计算嵌入向量
     _computeEmbedding(memory);
+    return memory;
   }
 
   /// 异步计算记忆的嵌入向量
@@ -1464,7 +1926,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (!embeddingApiConfig.isValid) return;
     final expectedContent = memory.content;
     try {
-      final result = await AiService.getEmbedding(
+      final result = await _fetchEmbedding(
         baseUrl: embeddingApiConfig.baseUrl,
         apiKey: embeddingApiConfig.apiKey,
         model: embeddingApiConfig.model,
@@ -1484,19 +1946,158 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> updateMemory(String id, String content) async {
+    await updateMemoryFull(id, content: content);
+  }
+
+  /// 编辑记忆的完整字段：正文 / 主题 / 关键事实 / 重要性。
+  ///
+  /// 正文变化会触发重算嵌入；关键事实或重要性变化会重建该记忆的
+  /// 原子与图谱子图（原子继承新重要性）。
+  Future<void> updateMemoryFull(
+    String id, {
+    String? content,
+    List<String>? topics,
+    List<String>? keyFacts,
+    double? importance,
+  }) async {
     final index = memories.indexWhere((e) => e.id == id);
-    if (index < 0 || content.trim().isEmpty) return;
-    memories[index].content = content.trim();
-    memories[index].embedding = null; // 清除旧嵌入，后台重新计算
+    if (index < 0) return;
+    final memory = memories[index];
+
+    final newContent = content?.trim();
+    final contentChanged =
+        newContent != null && newContent.isNotEmpty && newContent != memory.content;
+    final factsChanged = keyFacts != null && !_stringListEquals(
+      keyFacts,
+      memory.keyFacts,
+    );
+    final importanceChanged =
+        importance != null && (importance - memory.importance).abs() > 1e-9;
+    if (!contentChanged && !factsChanged && !importanceChanged && topics == null) {
+      return;
+    }
+
+    if (contentChanged) {
+      memory.content = newContent;
+      memory.embedding = null; // 清除旧嵌入，后台重新计算
+    }
+    if (topics != null) memory.topics = topics;
+    if (keyFacts != null) memory.keyFacts = keyFacts;
+    if (importance != null) {
+      memory.importance = importance.clamp(0.0, 1.0);
+    }
+
+    // 原子与图谱重建（原子从关键事实分类、继承重要性）
+    if (memorySettings.atomEnabled && (factsChanged || importanceChanged)) {
+      memoryAtoms.removeWhere((a) => a.parentMemoryId == id);
+      if (memory.keyFacts.isNotEmpty) {
+        final atoms = classifyFacts(
+          keyFacts: memory.keyFacts,
+          topics: memory.topics,
+          participants: memory.participants,
+          parentMemoryId: id,
+          parentImportance: memory.importance,
+          sessionId: memory.sessionId,
+          personaId: memory.personaId,
+        );
+        memoryAtoms.addAll(atoms);
+        memory.atomTypes =
+            atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+      } else {
+        memory.atomTypes = [];
+      }
+      if (memorySettings.graphEnabled) {
+        graphStore.indexMemory(memory, _atomsOf(id));
+      }
+      _scheduleMemoryAuxPersist();
+    }
+
+    log.i(
+      'memory',
+      '编辑记忆：${id.substring(0, 8)}'
+          '${contentChanged ? "（正文）" : ""}'
+          '${factsChanged ? "（关键事实）" : ""}'
+          '${importanceChanged ? "（重要性）" : ""}',
+    );
     notifyListeners();
     _scheduleMemoriesPersist();
-    _computeEmbedding(memories[index]);
+    if (contentChanged) _computeEmbedding(memory);
   }
 
   Future<void> deleteMemory(String id) async {
-    memories.removeWhere((m) => m.id == id);
+    _removeMemoryInternal(id);
     notifyListeners();
     _scheduleMemoriesPersist();
+    _scheduleMemoryAuxPersist();
+  }
+
+  /// 从记忆/原子/图谱三个索引中彻底移除一条记忆
+  void _removeMemoryInternal(String id) {
+    memories.removeWhere((m) => m.id == id);
+    memoryAtoms.removeWhere((a) => a.parentMemoryId == id);
+    graphStore.deleteMemory(id);
+  }
+
+  /// 归档 / 恢复一条记忆
+  Future<void> setMemoryArchived(String id, bool archived) async {
+    final index = memories.indexWhere((e) => e.id == id);
+    if (index < 0) return;
+    if (archived) {
+      archiveMemory(memories[index]);
+      log.i('memory', '归档记忆：${id.substring(0, 8)}');
+    } else {
+      restoreMemory(memories[index]);
+      log.i('memory', '恢复记忆：${id.substring(0, 8)}');
+    }
+    notifyListeners();
+    _scheduleMemoriesPersist();
+  }
+
+  /// 批量导入记忆条目（保留完整元数据），并补算嵌入 / 原子 / 图谱。
+  /// 返回成功导入的数量。id 冲突时重新生成。
+  Future<int> importMemoryEntries(List<MemoryEntry> entries) async {
+    var imported = 0;
+    for (final original in entries) {
+      var m = original;
+      if (memories.any((e) => e.id == m.id)) {
+        // id 冲突：重新生成（其余元数据保留）
+        final json = m.toJson();
+        json['id'] = _uuid.v4();
+        m = MemoryEntry.fromJson(json.cast<String, dynamic>());
+      }
+      memories.insert(0, m);
+      imported++;
+
+      _computeEmbedding(m);
+
+      if (memorySettings.atomEnabled) {
+        final facts = m.keyFacts.isNotEmpty ? m.keyFacts : [m.content];
+        final atoms = classifyFacts(
+          keyFacts: facts,
+          topics: m.topics,
+          participants: m.participants,
+          parentMemoryId: m.id,
+          parentImportance: m.importance,
+          sessionId: m.sessionId,
+          personaId: m.personaId,
+        );
+        if (atoms.isNotEmpty) {
+          memoryAtoms.addAll(atoms);
+          m.atomTypes =
+              atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+          if (memorySettings.graphEnabled) {
+            graphStore.indexMemory(m, atoms);
+          }
+        }
+      }
+    }
+    if (imported > 0) {
+      log.i('memory', '批量导入记忆：$imported 条');
+      notifyListeners();
+      _scheduleMemoriesPersist();
+      _scheduleMemoryAuxPersist();
+    }
+    return imported;
   }
 
   // ---------- 会话 ----------
@@ -1584,6 +2185,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final title = sessions.where((s) => s.id == id).firstOrNull?.title ?? id;
     sessions.removeWhere((s) => s.id == id);
     if (currentSessionId == id) currentSessionId = null;
+    // 同步清理该会话的记忆提取游标
+    if (memoryReflectionState.remove(id) != null) {
+      _scheduleMemoryAuxPersist();
+    }
     log.i('chat', '删除会话：$title');
     notifyListeners();
     _scheduleSessionsPersist();
@@ -1594,6 +2199,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final count = sessions.length;
     sessions.clear();
     currentSessionId = null;
+    // 同步清理所有会话的记忆提取游标（否则残留游标会污染后续同 id 会话）
+    if (memoryReflectionState.isNotEmpty) {
+      memoryReflectionState.clear();
+      _scheduleMemoryAuxPersist();
+    }
     log.w('chat', '清空所有会话（共 $count 个）');
     notifyListeners();
     _scheduleSessionsPersist();
@@ -1678,17 +2288,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
+    // 加载气泡和用户消息放在同一帧里长出来，避免 140ms 后再顶一次列表。
+    _ensureTypingBubble(session, speakerId: speaker?.id ?? persona?.id);
+
     // 私聊消息合并防抖：等待一段时间，合并后续消息后一起发送
     if (messageMergeEnabled && !isGroup) {
       log.d('chat', '消息合并已启用，调度防抖回复（${messageMergeDebounce}s）');
-      // 立刻显示对面加载气泡，避免等倒计时结束后才出现
-      _ensureTypingBubble(session, speakerId: persona?.id);
       _scheduleMergedReply(session: session, api: api, persona: persona);
       return;
     }
 
-    // 立刻显示对面加载气泡，再进入回复循环
-    _ensureTypingBubble(session, speakerId: speaker?.id ?? persona?.id);
     await _replyLoop(
       session: session,
       api: api,
@@ -2063,7 +2672,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       segmentedSettings: segmentedSettings,
     );
 
-    if (injectMemories && embeddingApiConfig.isValid) {
+    if (injectMemories) {
       await _injectMemories(
         apiMessages: apiMessages,
         text: text,
@@ -2123,12 +2732,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     } else {
       buf.writeln('你是一个乐于助人的 AI 助手。');
     }
-    // 引导 AI 主动使用 save_memory 工具记录关键信息
+    // 引导 AI 主动使用记忆工具读写长期记忆
     buf.writeln(
-      '\n\n【记忆工具】你可以使用 save_memory 工具主动保存用户的关键信息'
-      '（如偏好、身份、重要事实、习惯等）到长期记忆。'
-      '当用户透露了值得记住的信息时，请调用该工具，无需告知用户。'
-      '每次只保存一条简洁明确的信息，不要保存闲聊或无意义内容。',
+      '\n\n【记忆工具】你有两个长期记忆工具：'
+      'save_memory 用于保存用户的关键信息（如偏好、身份、重要事实、习惯等），'
+      '当用户透露了值得记住的信息时请调用，无需告知用户，每次只保存一条简洁明确的信息；'
+      'recall_long_term_memory 用于按需回忆，当需要回想用户的过往偏好、历史约定、'
+      '人物关系或之前聊过的话题时，用简短关键词调用查询。不要保存或召回闲聊内容。',
     );
     if (stickersEnabled) {
       final stickerPersonaId = isGroup ? speaker?.id : persona?.id;
@@ -2202,8 +2812,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     required String? personaId,
     required String sessionId,
   }) async {
-    // 注入前清除历史中已注入的旧记忆片段，避免重复累积和 token 浪费
-    _stripInjectedMemories(apiMessages);
+    // 注入前清除历史中已注入的旧记忆片段（新旧两种格式），避免重复累积
+    final stripped = stripInjectedMemories(apiMessages);
+    if (stripped) log.d('memory', '已剥离历史中的旧记忆注入块');
 
     final relevant = await _retrieveRelevantMemories(
       text,
@@ -2212,43 +2823,27 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     );
     if (relevant.isEmpty) return;
 
-    final memBuf = StringBuffer('【长期记忆】以下是关于用户的关键信息，请自然地参考：\n');
-    for (final m in relevant) {
-      memBuf.writeln('- ${m.content}');
-    }
+    final memoryBlock = formatMemoriesForInjection(
+      memories: relevant,
+      atomsOf: (entry) => _atomsOf(entry.id),
+      atomPolicyEnabled: memorySettings.atomEnabled,
+    );
+    if (memoryBlock.isEmpty) return;
+
     final lastUser = apiMessages.lastIndexWhere((m) => m['role'] == 'user');
     if (lastUser < 0) return;
 
     final original = apiMessages[lastUser]['content'] as String;
     final injected = memorySettings.injectionPosition == 'prepend'
-        ? '$memBuf\n$original'
-        : '$original\n$memBuf';
+        ? '$memoryBlock\n$original'
+        : '$original\n$memoryBlock';
     apiMessages[lastUser] = {'role': 'user', 'content': injected};
     log.d(
       'memory',
       '注入 ${relevant.length} 条记忆到用户消息'
-          '（${memorySettings.injectionPosition}）',
+          '（${memorySettings.injectionPosition}，'
+          '块长度=${memoryBlock.length}）',
     );
-  }
-
-  /// 移除历史消息中已注入的记忆片段
-  /// 匹配格式：【长期记忆】...\n（直到下一个非列表行或消息末尾）
-  static final _injectedMemoryRegex = RegExp(r'【长期记忆】[\s\S]*?(?=\n\S|\n*$|$)');
-  static final _trailingMemoryRegex = RegExp(r'\n?【长期记忆】[\s\S]*$');
-
-  void _stripInjectedMemories(List<Map<String, dynamic>> apiMessages) {
-    for (int i = 0; i < apiMessages.length; i++) {
-      final msg = apiMessages[i];
-      if (msg['role'] != 'user') continue;
-      final content = msg['content'] as String;
-      if (!content.contains('【长期记忆】')) continue;
-      // 移除前置记忆（prepend 模式）
-      var cleaned = content.replaceAll(_injectedMemoryRegex, '');
-      // 移除后置记忆（append 模式）
-      cleaned = cleaned.replaceAll(_trailingMemoryRegex, '');
-      cleaned = cleaned.trim();
-      apiMessages[i] = {'role': 'user', 'content': cleaned};
-    }
   }
 
   /// Agent 循环：最多 5 轮工具调用，每轮流式输出
@@ -2450,15 +3045,20 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     _AssistantPart part,
     Persona? speaker, {
     required bool segmented,
+    bool loading = false,
+    String? contentOverride,
   }) {
-    final message = ChatMessage(
-      id: _uuid.v4(),
-      role: 'assistant',
-      content: part.text,
-      timestamp: DateTime.now(),
-      speakerId: speaker?.id,
-      stickerId: part.stickerId,
-    )..isSegmented = segmented;
+    final message =
+        ChatMessage(
+            id: _uuid.v4(),
+            role: 'assistant',
+            content: contentOverride ?? part.text,
+            timestamp: DateTime.now(),
+            speakerId: speaker?.id,
+            stickerId: part.stickerId,
+          )
+          ..isSegmented = segmented
+          ..isStreaming = loading;
     session.messages.add(message);
     return message;
   }
@@ -2476,29 +3076,32 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     final delays = [
       for (final part in remaining)
-        part.stickerId != null
-            ? const Duration(milliseconds: 450)
-            : SegmentedSplitter.segmentDelay(
-                segmentChars: part.text.characters.length,
-                s: settings,
-              ),
+        SegmentedSplitter.deliveryDelay(
+          isSticker: part.stickerId != null,
+          segmentChars: part.text.characters.length,
+          s: settings,
+        ),
     ];
     await _segmentedDeliveryScheduler.deliver(
       sessionId: session.id,
       itemCount: remaining.length,
       delayFor: (index) => delays[index],
       onDeliver: (index) {
+        final part = remaining[index];
+        // 内容已经切好，直接入场。不要先插一个空的加载气泡，
+        // 否则每一段都会先闪圆点，再把列表顶上去一次。
         final message = _appendAssistantPart(
           session,
-          remaining[index],
+          part,
           speaker,
           segmented: true,
         );
         notifyListeners();
         _scheduleSessionsPersist();
         late final Timer visualTimer;
-        visualTimer = Timer(const Duration(milliseconds: 330), () {
+        visualTimer = Timer(const Duration(milliseconds: 480), () {
           _segmentVisualTimers.remove(visualTimer);
+          if (!session.messages.contains(message)) return;
           message.isSegmented = false;
           notifyListeners();
         });
@@ -2575,10 +3178,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         .where((t) => t.name == tc.name)
         .toList();
     if (builtin.isNotEmpty) {
-      // 嵌入未配置时，save_memory 工具被禁用
-      if (tc.name == 'save_memory' && !embeddingApiConfig.isValid) {
-        log.w('tool', 'save_memory 调用被拒绝：嵌入 API 未配置');
-        return '记忆系统未启用：请先配置嵌入 API';
+      if (tc.name == 'recall_long_term_memory') {
+        final query = tc.arguments['query'] as String? ?? '';
+        final k = (tc.arguments['k'] as num?)?.toInt() ?? 5;
+        return _recallMemoriesForTool(
+          query,
+          k,
+          personaId: speaker?.id ?? persona?.id,
+          sessionId: sessionId,
+        );
       }
       return BuiltinTools.execute(
         tc.name,
@@ -2586,6 +3194,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         onSaveMemory: (content) => addMemory(
           content,
           source: 'auto',
+          personaId: speaker?.id ?? persona?.id,
+          sessionId: sessionId,
+        ),
+        onRecallMemory: (query, k) => _recallMemoriesForTool(
+          query,
+          k,
           personaId: speaker?.id ?? persona?.id,
           sessionId: sessionId,
         ),
@@ -2598,11 +3212,115 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     return HttpToolExecutor.execute(custom.first, tc.arguments);
   }
+
+  /// 召回工具实现：混合检索并返回 JSON 结果（照抄原版工具输出结构）
+  Future<String> _recallMemoriesForTool(
+    String query,
+    int requestedK, {
+    String? personaId,
+    required String sessionId,
+  }) async {
+    final k = requestedK.clamp(1, memorySettings.maxK).toInt();
+    final atomIndex = _atomIndexByMemory();
+    final candidates = memories
+        .map((m) => RetrievalMemory(
+              entry: m,
+              atoms: atomIndex[m.id] ?? const [],
+            ))
+        .toList();
+
+    List<double>? queryEmbedding;
+    if (embeddingApiConfig.isValid) {
+      try {
+        final result = await _fetchEmbedding(
+          baseUrl: embeddingApiConfig.baseUrl,
+          apiKey: embeddingApiConfig.apiKey,
+          model: embeddingApiConfig.model,
+          text: query,
+        );
+        queryEmbedding = result.embedding;
+        await addTokenUsage(inputTokens: result.inputTokens);
+      } catch (_) {}
+    }
+
+    final s = memorySettings;
+    final results = await searchMemories(
+      query: query,
+      candidates: candidates,
+      scope: _memoryScope(personaId: personaId, sessionId: sessionId),
+      config: RetrievalConfig(
+        topK: k,
+        rrfK: s.rrfK,
+        scoreAlpha: s.scoreAlpha,
+        scoreBeta: s.scoreBeta,
+        scoreGamma: s.scoreGamma,
+        mmrLambda: s.mmrLambda,
+        graphEnabled: s.graphEnabled,
+        documentRouteWeight: s.documentRouteWeight,
+        graphRouteWeight: s.graphRouteWeight,
+        crossRouteBonus: s.crossRouteBonus,
+        dynamicRouteWeighting: s.dynamicRouteWeighting,
+        decayRate: s.decayRate,
+        minImportanceForRetrieval: s.minImportanceForRetrieval,
+        minSimilarityForRetrieval: s.minSimilarityForRetrieval,
+        memoryTypeFilter: s.memoryTypeFilter,
+        recentMemoryCount: s.recentMemoryCount,
+        recentMemoryMaxAgeHours: s.recentMemoryMaxAgeHours,
+        atomEnabled: s.atomEnabled,
+        graphExpansionLimit: s.graphExpansionLimit,
+        graphExpansionHops: s.graphExpansionHops,
+        graphSecondHopWeight: s.graphSecondHopWeight,
+      ),
+      graphStore: s.graphEnabled ? graphStore : null,
+      queryEmbedding: queryEmbedding,
+    );
+
+    for (final r in results) {
+      reinforceOnRetrieval(
+        r.entry,
+        r.memory.atoms,
+        maxAccessBoost: s.maxAccessBoost,
+      );
+    }
+    if (results.isNotEmpty) {
+      _scheduleMemoriesPersist();
+      _scheduleMemoryAuxPersist();
+    }
+
+    final payload = {
+      'query': query,
+      'applied_filters': {
+        'session_filtered': s.useSessionFiltering,
+        'persona_filtered': personaId != null,
+      },
+      'count': results.length,
+      'results': results
+          .map((r) => {
+                'id': r.entry.id,
+                'content': r.entry.displayContent,
+                'score': double.parse(r.finalScore.toStringAsFixed(4)),
+                'importance': r.entry.importance,
+                'create_time': r.entry.createdAt.toIso8601String(),
+                if (r.entry.topics.isNotEmpty) 'topics': r.entry.topics,
+                if (r.entry.keyFacts.isNotEmpty) 'key_facts': r.entry.keyFacts,
+              })
+          .toList(),
+    };
+    return jsonEncode(payload);
+  }
 }
 
 /// 用户主动取消生成
 class _CancelException implements Exception {
   const _CancelException();
+}
+
+bool _stringListEquals(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 /// 待回复消息（回复过程中用户继续发送的消息）

@@ -194,4 +194,20 @@ void main() {
     expect(restored.replaceRules.last.find, 'ok');
     expect(restored.replaceRules.last.replace, 'done');
   });
+
+  test('图片分段使用固定的发送间隔', () {
+    final s = settings(
+      maxSegments: 2,
+      minSegmentLength: 1,
+    ).copyWith(linearBase: 0, linearCharFactor: 0);
+
+    expect(
+      SegmentedSplitter.deliveryDelay(isSticker: true, segmentChars: 1, s: s),
+      const Duration(seconds: 2),
+    );
+    expect(
+      SegmentedSplitter.deliveryDelay(isSticker: false, segmentChars: 1, s: s),
+      Duration.zero,
+    );
+  });
 }

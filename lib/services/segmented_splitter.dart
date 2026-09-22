@@ -442,6 +442,17 @@ class SegmentedSplitter {
     return Duration(milliseconds: (seconds * 1000).round());
   }
 
+  /// Uses a fixed pause for stickers so a standalone image does not appear
+  /// immediately after the previous segment.
+  static Duration deliveryDelay({
+    required bool isSticker,
+    required int segmentChars,
+    required SegmentedSendSettings s,
+  }) {
+    if (isSticker) return const Duration(seconds: 2);
+    return segmentDelay(segmentChars: segmentChars, s: s);
+  }
+
   /// 给一段长文本 + 设置 → 返回分段结果与每段对应的延迟
   static List<SegmentPlan> plan(String raw, SegmentedSendSettings s) {
     final segs = split(raw, s);

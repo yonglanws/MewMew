@@ -32,12 +32,22 @@ class BuiltinTools {
           paramsSchemaJson:
               '{"type":"object","properties":{"content":{"type":"string","description":"要记住的关键信息，简洁明确"}},"required":["content"]}',
         ),
+        ToolConfig(
+          id: 'builtin_recall_memory',
+          name: 'recall_long_term_memory',
+          description:
+              '按需检索长期记忆。当需要回忆用户的过往偏好、历史约定、人物关系或之前聊过的话题时调用。query 使用简短的主题关键词，而非整句话',
+          type: ToolType.builtin,
+          paramsSchemaJson:
+              '{"type":"object","properties":{"query":{"type":"string","description":"简短的召回关键词，如 用户喜欢的食物、上周的约定"},"k":{"type":"integer","description":"返回条数，默认 5"}},"required":["query"]}',
+        ),
       ];
 
   static Future<String> execute(
     String name,
     Map<String, dynamic> args, {
     required Future<void> Function(String content) onSaveMemory,
+    Future<String> Function(String query, int k)? onRecallMemory,
   }) async {
     switch (name) {
       case 'get_current_time':
@@ -54,6 +64,12 @@ class BuiltinTools {
         if (content.isEmpty) return '内容为空，未保存';
         await onSaveMemory(content);
         return '已保存到记忆: $content';
+      case 'recall_long_term_memory':
+        final query = (args['query'] as String? ?? '').trim();
+        if (query.isEmpty) return '查询词为空，未执行召回';
+        final k = (args['k'] as num?)?.toInt() ?? 5;
+        if (onRecallMemory == null) return '记忆召回不可用';
+        return onRecallMemory(query, k);
       default:
         return '未知内置工具: $name';
     }
