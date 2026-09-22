@@ -10,7 +10,7 @@ import 'message_debounce_settings_page.dart';
 import 'persona_page.dart';
 import 'segmented_send_settings_page.dart';
 import 'sticker_management_page.dart';
-import 'tools_page.dart';
+
 
 /// 设置页：按功能分组的列表
 class SettingsPage extends StatelessWidget {
@@ -82,16 +82,9 @@ class SettingsPage extends StatelessWidget {
                 _SettingTile(
                   icon: Icons.memory_outlined,
                   iconColor: cs.tertiary,
-                  title: '嵌入 API 配置',
-                  subtitle: '配置记忆检索使用的嵌入模型',
+                  title: '嵌入 API 配置（可选）',
+                  subtitle: '配置后启用语义检索；未配置时关键词与图谱检索仍可用',
                   onTap: () => _showEmbeddingApiSheet(context),
-                ),
-                _SettingTile(
-                  icon: Icons.extension_outlined,
-                  iconColor: cs.secondary,
-                  title: '工具调用',
-                  subtitle: '管理可供 AI 使用的工具',
-                  onTap: () => _push(context, const ToolsPage()),
                 ),
               ],
             ),

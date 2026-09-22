@@ -1,7 +1,7 @@
 name: mewmew
 description: "A new Flutter project."
 publish_to: 'none'
-version: 0.1.0
+version: 0.1.1+2
 
 environment:
   sdk: ^3.8.1
@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   characters: ^1.4.0
+  file_picker: ^8.3.7
   flutter_markdown: ^0.7.7+1
   http: ^1.6.0
   image_picker: ^1.2.1

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,11 +15,18 @@ class StorageService {
   static const _kActivePersonaId = 'active_persona_id';
   static const _kTools = 'tools';
   static const _kMemories = 'memories';
+  static const _kMemoryEmbeddings = 'memory_embeddings';
+  static const _kMemoryAtoms = 'memory_atoms';
+  static const _kMemoryReflectionState = 'memory_reflection_state';
+  static const _kMemoryMaintenanceState = 'memory_maintenance_state';
+  static const _kMemoryGraph = 'memory_graph_v1';
   static const _kSessions = 'sessions';
   static const _kThemeMode = 'theme_mode';
   static const _kInjectMemories = 'inject_memories';
   static const _kCrossSessionMemories = 'cross_session_memories';
   static const _kMemorySettings = 'memory_settings';
+  static const _kSummaryThresholdMigrated =
+      'memory_summary_threshold_migrated_v2';
   static const _kTokenUsage = 'token_usage';
   static const _kTokenDailyUsage = 'token_daily_usage';
   static const _kAppLaunchCount = 'app_launch_count';
@@ -104,10 +112,122 @@ class StorageService {
   Future<void> saveTools(List<ToolConfig> list) => _saveList(_kTools, list);
 
   // 记忆
-  List<MemoryEntry> loadMemories() =>
-      _loadList(_kMemories, MemoryEntry.fromJson);
-  Future<void> saveMemories(List<MemoryEntry> list) =>
-      _saveList(_kMemories, list);
+  //
+  // 嵌入向量分离存储（memory_embeddings：id → 向量）：记忆列表保存频繁且小，
+  // 向量大且稳定；分离后高频保存不再反复序列化大浮点数组。
+  // 兼容旧格式：memories JSON 内联的 embedding 会在读取时提取并归位。
+  List<MemoryEntry> loadMemories() {
+    final entries = _loadList(_kMemories, MemoryEntry.fromJson);
+    final embeddings = _loadEmbeddings();
+    var migrated = false;
+    for (final e in entries) {
+      final inline = e.embedding;
+      if (inline != null) {
+        // 旧格式内联向量：提取到分离存储
+        embeddings[e.id] = inline;
+        e.embedding = null;
+        migrated = true;
+      }
+      final stored = embeddings[e.id];
+      if (stored != null) {
+        e.embedding = stored;
+      }
+    }
+    if (migrated) {
+      // 一次性写出分离格式，并清掉 memories 里的内联向量
+      unawaited(_saveMemoryEntries(entries, embeddings));
+      log.i('storage', '记忆嵌入向量迁移到独立存储：${embeddings.length} 条');
+    }
+    return entries;
+  }
+
+  Map<String, List<double>> _loadEmbeddings() {
+    final raw = _prefs.getString(_kMemoryEmbeddings);
+    if (raw == null) return {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return decoded.map(
+        (k, v) => MapEntry(
+          k,
+          (v as List).map((e) => (e as num).toDouble()).toList(),
+        ),
+      );
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _saveMemoryEntries(
+    List<MemoryEntry> list,
+    Map<String, List<double>> embeddings,
+  ) async {
+    final items = list.map((e) {
+      final json = e.toJson()..remove('embedding');
+      return json;
+    }).toList();
+    await _prefs.setString(_kMemories, jsonEncode(items));
+    await _prefs.setString(_kMemoryEmbeddings, jsonEncode(embeddings));
+  }
+
+  Future<void> saveMemories(List<MemoryEntry> list) async {
+    final embeddings = <String, List<double>>{};
+    for (final e in list) {
+      if (e.embedding != null) embeddings[e.id] = e.embedding!;
+    }
+    await _saveMemoryEntries(list, embeddings);
+  }
+
+  // 记忆原子（细粒度事实单元，含 TTL/衰减状态）
+  List<MemoryAtom> loadMemoryAtoms() =>
+      _loadList(_kMemoryAtoms, MemoryAtom.fromJson);
+  Future<void> saveMemoryAtoms(List<MemoryAtom> list) =>
+      _saveList(_kMemoryAtoms, list);
+
+  // 反思状态：每会话已总结到的消息下标 + 失败重试区间（重启后不丢）
+  Map<String, Map<String, dynamic>> loadMemoryReflectionState() {
+    final raw = _prefs.getString(_kMemoryReflectionState);
+    if (raw == null) return {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return decoded.map(
+        (k, v) => MapEntry(k, (v as Map).cast<String, dynamic>()),
+      );
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveMemoryReflectionState(
+          Map<String, Map<String, dynamic>> state) =>
+      _prefs.setString(_kMemoryReflectionState, jsonEncode(state));
+
+  // 维护状态：上次衰减执行日期 / 上次整理时间
+  Map<String, dynamic> loadMemoryMaintenanceState() {
+    final raw = _prefs.getString(_kMemoryMaintenanceState);
+    if (raw == null) return {};
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveMemoryMaintenanceState(Map<String, dynamic> state) =>
+      _prefs.setString(_kMemoryMaintenanceState, jsonEncode(state));
+
+  // 图谱记忆（节点/边/条目的 JSON 快照）
+  Map<String, dynamic>? loadMemoryGraph() {
+    final raw = _prefs.getString(_kMemoryGraph);
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveMemoryGraph(Map<String, dynamic> json) =>
+      _prefs.setString(_kMemoryGraph, jsonEncode(json));
 
   List<StickerItem> loadStickerItems() =>
       _loadList(_kStickerItems, StickerItem.fromJson);
@@ -207,6 +327,12 @@ class StorageService {
 
   Future<void> saveMemorySettings(MemorySettings settings) =>
       _prefs.setString(_kMemorySettings, jsonEncode(settings.toJson()));
+
+  /// 总结轮数默认值 10 → 20 的一次性迁移标记
+  bool get summaryThresholdMigrated =>
+      _prefs.getBool(_kSummaryThresholdMigrated) ?? false;
+  Future<void> markSummaryThresholdMigrated() =>
+      _prefs.setBool(_kSummaryThresholdMigrated, true);
 
   // 对话分段发送设置
   SegmentedSendSettings loadSegmentedSendSettings() {

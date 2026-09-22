@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show pow;
 
 import 'package:http/http.dart' as http;
 
@@ -129,77 +130,43 @@ class AiService {
     );
   }
 
-  /// 总结对话为一条记忆，返回总结文本、重要性评分与 token 使用量
-  /// 重要性评分范围 0.0-1.0，由模型评估
-  static Future<(String summary, double importance, int inputTokens, int outputTokens)>
-      summarizeConversation({
+  /// 通用后台任务调用（记忆提取 / 整理合并共用）。
+  ///
+  /// 与 [summarizeConversation] 的区别：不做总结专用的提示词拼装与 JSON 解析，
+  /// 只负责带重试地完成一次 system+user 的非流式调用并透传原文与 token 用量。
+  /// 重试策略照抄 LivingMemory _call_llm_with_retry：最多 3 次，指数退避
+  /// 2^attempt + 随机抖动。
+  static Future<(String text, int inputTokens, int outputTokens)> runTask({
     required ApiConfig config,
-    required List<Map<String, dynamic>> messages,
-    String? personaName,
+    required String system,
+    required String user,
     String? model,
+    int maxRetries = 3,
   }) async {
-    final conversationText = StringBuffer();
-    for (final m in messages) {
-      final role = m['role'] as String;
-      if (role == 'system' || role == 'tool') continue;
-      final content = m['content'] as String? ?? '';
-      if (content.isEmpty) continue;
-      final label = role == 'user' ? '用户' : (personaName ?? 'AI');
-      conversationText.writeln('$label: $content');
-    }
-
-    final summaryMessages = [
-      {
-        'role': 'system',
-        'content': '你是一个记忆总结助手。请分析以下对话，提取值得长期记住的关键信息'
-            '（如用户身份、偏好、重要事实、关系、计划等），忽略闲聊和无意义内容。\n\n'
-            '输出严格 JSON 格式：\n'
-            '{"summary":"简洁的记忆描述，100字以内","importance":0.0到1.0的重要性评分}\n\n'
-            '重要性评分标准：\n'
-            '- 1.0：核心身份/关键偏好/重要关系等长期有效信息\n'
-            '- 0.7-0.9：重要事实、习惯、计划等\n'
-            '- 0.4-0.6：一般性信息、临时偏好\n'
-            '- 0.1-0.3：次要细节、短期上下文\n'
-            '- 0.0：无价值信息\n\n'
-            '只输出 JSON，不要加 markdown 代码块或任何解释。',
-      },
-      {
-        'role': 'user',
-        'content': '请总结以下对话：\n\n${conversationText.toString()}',
-      },
-    ];
-
-    final resp = await chat(
-      config: config,
-      messages: summaryMessages,
-      modelOverride: model,
-    );
-
-    // 解析 JSON 响应
-    final raw = (resp.content ?? '').trim();
-    String summary = raw;
-    double importance = 0.5;
-
-    try {
-      // 移除可能的 markdown 代码块标记
-      final jsonStr = raw
-          .replaceAll(RegExp(r'^```(?:json)?\s*'), '')
-          .replaceAll(RegExp(r'\s*```$'), '')
-          .trim();
-      final parsed = jsonDecode(jsonStr) as Map<String, dynamic>;
-      summary = (parsed['summary'] as String? ?? raw).trim();
-      importance = (parsed['importance'] as num?)?.toDouble() ?? 0.5;
-    } catch (_) {
-      // JSON 解析失败时，尝试提取 importance 字段，否则使用原始文本
-      final match = RegExp(r'"importance"\s*:\s*([\d.]+)').firstMatch(raw);
-      if (match != null) {
-        importance = double.tryParse(match.group(1)!) ?? 0.5;
-        summary = raw.replaceAll(RegExp(r'\s*"importance"\s*:\s*[\d.]+\s*,?'), '').trim();
+    Object? lastError;
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      if (attempt > 0) {
+        final backoff =
+            Duration(milliseconds: ((pow(2, attempt) * 1000).toInt()) +
+                DateTime.now().millisecondsSinceEpoch % 1000);
+        await Future<void>.delayed(backoff);
+      }
+      try {
+        final resp = await chat(
+          config: config,
+          messages: [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user},
+          ],
+          modelOverride: model,
+        );
+        return ((resp.content ?? '').trim(), resp.inputTokens, resp.outputTokens);
+      } catch (e) {
+        lastError = e;
+        log.w('api', '记忆任务调用失败（第 ${attempt + 1} 次）', error: e);
       }
     }
-    importance = importance.clamp(0.0, 1.0);
-
-    return (summary, importance, resp.inputTokens, resp.outputTokens);
+    throw Exception('记忆任务调用连续失败 $maxRetries 次: $lastError');
   }
 
   /// 获取可用模型列表（OpenAI 兼容 /v1/models）

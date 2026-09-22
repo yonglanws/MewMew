@@ -7,6 +7,7 @@ import '../state/app_state.dart';
 import '../utils/fast_route.dart';
 import '../widgets/persona_avatar.dart';
 import 'dashboard_page.dart';
+import 'memory_graph_page.dart';
 
 /// 记忆管理页面
 class MemoryPage extends StatefulWidget {
@@ -51,7 +52,7 @@ class _MemoryPageState extends State<MemoryPage> {
       for (final s in state.sessions)
         if (s.personaId != null && s.groupChatId == null) s.id,
     };
-    final isGlobal = !state.memorySettings.useSessionFiltering;
+    final isGlobal = state.memorySettings.memoryScopeMode == 'global';
     final hasLegacyMemories = state.memories.any((m) => m.personaId == null);
 
     if (isGlobal) {
@@ -67,11 +68,24 @@ class _MemoryPageState extends State<MemoryPage> {
     // 构建会话筛选选项
     final sessionOptions = _buildGlobalSessionOptions(state);
     final filtered = _filterAndSortGlobal(state.memories.toList(), state);
+    // 归档记忆不混排在主列表，折叠到末尾分区
+    final visible = filtered.where((m) => m.status == 'active').toList();
+    final archived = filtered.where((m) => m.status != 'active').toList();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('查看记忆'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.hub_outlined),
+            tooltip: '记忆图谱',
+            onPressed: () {
+              Navigator.push(
+                context,
+                FastRoute(builder: (_) => const MemoryGraphPage()),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.dashboard_outlined),
             tooltip: '记忆系统仪表盘',
@@ -117,10 +131,24 @@ class _MemoryPageState extends State<MemoryPage> {
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
                       cacheExtent: 500,
-                      itemCount: filtered.length,
+                      itemCount: visible.length + (archived.isEmpty ? 0 : 1),
                       separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (context, i) {
-                        final m = filtered[i];
+                        if (i >= visible.length) {
+                          return _ArchivedSection(
+                            memories: archived,
+                            keyword: _keyword.trim(),
+                            labelFor: (m) => _globalSessionLabelFor(state, m),
+                            onTap: (m) => _showEditDialog(
+                              context,
+                              persona: state.personaById(m.personaId),
+                              memory: m,
+                            ),
+                            onDelete: (m) =>
+                                context.read<AppState>().deleteMemory(m.id),
+                          );
+                        }
+                        final m = visible[i];
                         final sessionLabel = _globalSessionLabelFor(state, m);
                         return RepaintBoundary(
                           child: _MemoryCard(
@@ -299,11 +327,24 @@ class _MemoryPageState extends State<MemoryPage> {
       return m.sessionId == _sessionId;
     }).toList();
     final filtered = _applyKeywordAndSort(rawMemories);
+    // 归档记忆折叠分区
+    final visible = filtered.where((m) => m.status == 'active').toList();
+    final archived = filtered.where((m) => m.status != 'active').toList();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('查看记忆'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.hub_outlined),
+            tooltip: '记忆图谱',
+            onPressed: () {
+              Navigator.push(
+                context,
+                FastRoute(builder: (_) => const MemoryGraphPage()),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.dashboard_outlined),
             tooltip: '记忆系统仪表盘',
@@ -340,6 +381,17 @@ class _MemoryPageState extends State<MemoryPage> {
                       _sessionId = null;
                     }),
                   ),
+                  if (state.memorySettings.memoryScopeMode == 'persona')
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                      child: Text(
+                        '人物隔离：这个人物在所有会话里共用同一份记忆',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                      ),
+                    ),
                   // 会话过滤（包含群聊）
                   if (sessions.isNotEmpty ||
                       _hasGeneralMemories(state, selectedId))
@@ -365,11 +417,32 @@ class _MemoryPageState extends State<MemoryPage> {
                         : ListView.separated(
                             padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
                             cacheExtent: 500,
-                            itemCount: filtered.length,
+                            itemCount:
+                                visible.length + (archived.isEmpty ? 0 : 1),
                             separatorBuilder: (_, __) =>
                                 const SizedBox(height: 8),
                             itemBuilder: (context, i) {
-                              final m = filtered[i];
+                              if (i >= visible.length) {
+                                return _ArchivedSection(
+                                  memories: archived,
+                                  keyword: _keyword.trim(),
+                                  labelFor: (m) => _sessionLabelFor(
+                                    state,
+                                    m,
+                                    sessions,
+                                    selectedPersona?.name,
+                                  ),
+                                  onTap: (m) => _showEditDialog(
+                                    context,
+                                    persona: selectedPersona,
+                                    memory: m,
+                                  ),
+                                  onDelete: (m) => context
+                                      .read<AppState>()
+                                      .deleteMemory(m.id),
+                                );
+                              }
+                              final m = visible[i];
                               final sessionLabel = _sessionLabelFor(
                                 state,
                                 m,
@@ -403,7 +476,17 @@ class _MemoryPageState extends State<MemoryPage> {
   List<MemoryEntry> _applyKeywordAndSort(List<MemoryEntry> list) {
     if (_keyword.trim().isNotEmpty) {
       final kw = _keyword.trim().toLowerCase();
-      list = list.where((m) => m.content.toLowerCase().contains(kw)).toList();
+      bool matches(MemoryEntry m) {
+        if (m.content.toLowerCase().contains(kw)) return true;
+        if (m.personaSummary.toLowerCase().contains(kw)) return true;
+        if (m.topics.any((t) => t.toLowerCase().contains(kw))) return true;
+        if (m.keyFacts.any((f) => f.toLowerCase().contains(kw))) return true;
+        if (m.participants.any((p) => p.toLowerCase().contains(kw))) {
+          return true;
+        }
+        return false;
+      }
+      list = list.where(matches).toList();
     }
     switch (_sortBy) {
       case _SortBy.timeDesc:
@@ -494,47 +577,303 @@ class _MemoryPageState extends State<MemoryPage> {
     Persona? persona,
     MemoryEntry? memory,
   }) {
-    final controller = TextEditingController(text: memory?.content ?? '');
+    final isArchived = memory?.status == 'archived';
+    final contentCtrl = TextEditingController(text: memory?.content ?? '');
+    final factsCtrl = TextEditingController(
+      text: memory?.keyFacts.join('\n') ?? '',
+    );
+    var topics = memory?.topics.toList() ?? <String>[];
+    var importance = memory?.importance ?? 0.5;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          memory == null
-              ? (persona != null ? '为「${persona.name}」添加记忆' : '添加通用记忆')
-              : '编辑记忆',
-        ),
-        content: TextField(
-          controller: controller,
-          maxLines: 3,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '如：用户喜欢猫，讨厌香菜',
-            border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => Dialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 32,
+          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 560,
+              maxHeight: MediaQuery.sizeOf(ctx).height * 0.85,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
+                  child: Row(
+                    children: [
+                      Text(
+                        memory == null
+                            ? (persona != null
+                                ? '为「${persona.name}」添加记忆'
+                                : '添加通用记忆')
+                            : '编辑记忆',
+                        style: Theme.of(ctx).textTheme.titleMedium,
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 20),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('记忆内容',
+                            style: Theme.of(ctx).textTheme.labelLarge),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: contentCtrl,
+                          minLines: 4,
+                          maxLines: 8,
+                          autofocus: memory == null,
+                          decoration: const InputDecoration(
+                            hintText: '如：用户喜欢猫，讨厌香菜',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Text('主题', style: Theme.of(ctx).textTheme.labelLarge),
+                        const SizedBox(height: 6),
+                        _TopicsEditor(
+                          initial: memory?.topics ?? const [],
+                          onChanged: (list) => topics = list,
+                        ),
+                        const SizedBox(height: 14),
+                        Text('关键事实（每行一条，用于生成记忆原子）',
+                            style: Theme.of(ctx).textTheme.labelLarge),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: factsCtrl,
+                          minLines: 2,
+                          maxLines: 5,
+                          decoration: const InputDecoration(
+                            hintText: '如：\n用户养了一只猫\n用户不吃香菜',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Text('重要性',
+                                style: Theme.of(ctx).textTheme.labelLarge),
+                            Expanded(
+                              child: Slider(
+                                value: importance,
+                                min: 0,
+                                max: 1,
+                                divisions: 20,
+                                label: importance.toStringAsFixed(2),
+                                onChanged: (v) =>
+                                    setDialogState(() => importance = v),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 44,
+                              child: Text(
+                                importance.toStringAsFixed(2),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: Theme.of(ctx).colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 16, 12),
+                  child: Row(
+                    children: [
+                      if (memory != null)
+                        TextButton.icon(
+                          onPressed: () {
+                            context
+                                .read<AppState>()
+                                .setMemoryArchived(memory.id, !isArchived);
+                            Navigator.pop(ctx);
+                          },
+                          icon: Icon(
+                            isArchived
+                                ? Icons.unarchive_outlined
+                                : Icons.archive_outlined,
+                            size: 18,
+                          ),
+                          label: Text(isArchived ? '恢复' : '归档'),
+                        ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('取消'),
+                      ),
+                      const SizedBox(width: 4),
+                      FilledButton(
+                        onPressed: () async {
+                          final appState = context.read<AppState>();
+                          final text = contentCtrl.text.trim();
+                          final facts = factsCtrl.text
+                              .split('\n')
+                              .map((e) => e.trim())
+                              .where((e) => e.isNotEmpty)
+                              .toList();
+                          if (memory == null) {
+                            if (text.isNotEmpty) {
+                              final created = await appState.addMemory(
+                                text,
+                                personaId: persona?.id,
+                              );
+                              if (created != null) {
+                                await appState.updateMemoryFull(
+                                  created.id,
+                                  topics: topics,
+                                  keyFacts: facts,
+                                  importance: importance,
+                                );
+                              }
+                            }
+                          } else {
+                            await appState.updateMemoryFull(
+                              memory.id,
+                              content: text,
+                              topics: topics,
+                              keyFacts: facts,
+                              importance: importance,
+                            );
+                          }
+                          if (ctx.mounted) Navigator.pop(ctx);
+                        },
+                        child: const Text('保存'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final text = controller.text.trim();
-              if (text.isNotEmpty) {
-                final appState = context.read<AppState>();
-                if (memory == null) {
-                  appState.addMemory(text, personaId: persona?.id);
-                } else {
-                  appState.updateMemory(memory.id, text);
-                }
-              }
-              Navigator.pop(ctx);
-            },
-            child: const Text('保存'),
-          ),
-        ],
       ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────
+// 主题芯片编辑器
+// ──────────────────────────────────────────────
+
+/// 主题以芯片呈现，输入框回车或点 ➕ 添加；
+/// 输入/粘贴含「、,，」分隔符的文本时自动拆成多个芯片，天然去重。
+class _TopicsEditor extends StatefulWidget {
+  final List<String> initial;
+  final ValueChanged<List<String>> onChanged;
+
+  const _TopicsEditor({required this.initial, required this.onChanged});
+
+  @override
+  State<_TopicsEditor> createState() => _TopicsEditorState();
+}
+
+class _TopicsEditorState extends State<_TopicsEditor> {
+  late final List<String> _topics = List.from(widget.initial);
+  final _ctrl = TextEditingController();
+  final _focus = FocusNode();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _commit(String raw) {
+    final parts = raw
+        .split(RegExp(r'[、,，]'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .where((e) => !_topics.contains(e))
+        .toList();
+    _ctrl.clear();
+    if (parts.isEmpty) return;
+    setState(() => _topics.addAll(parts));
+    widget.onChanged(List.of(_topics));
+  }
+
+  void _remove(String topic) {
+    setState(() => _topics.remove(topic));
+    widget.onChanged(List.of(_topics));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_topics.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final topic in _topics)
+                  InputChip(
+                    label: Text(topic),
+                    labelPadding:
+                        const EdgeInsets.symmetric(horizontal: 4),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize:
+                        MaterialTapTargetSize.shrinkWrap,
+                    deleteIcon:
+                        const Icon(Icons.close, size: 16),
+                    onDeleted: () => _remove(topic),
+                  ),
+              ],
+            ),
+          ),
+        TextField(
+          controller: _ctrl,
+          focusNode: _focus,
+          maxLines: 1,
+          textInputAction: TextInputAction.done,
+          onSubmitted: _commit,
+          // 打分隔符（或粘贴带分隔符的文本）立即拆成芯片
+          onChanged: (v) {
+            if (v.contains(RegExp(r'[、,，]'))) _commit(v);
+          },
+          decoration: InputDecoration(
+            isDense: true,
+            hintText:
+                _topics.isEmpty ? '如：宠物、饮食偏好（回车添加）' : '添加主题…',
+            border: const OutlineInputBorder(),
+            suffixIcon: IconButton(
+              icon: Icon(Icons.add_circle_outline,
+                  size: 20, color: cs.primary),
+              tooltip: '添加',
+              onPressed: () {
+                if (_ctrl.text.trim().isEmpty) return;
+                _commit(_ctrl.text);
+                _focus.requestFocus();
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1105,6 +1444,87 @@ class _SortButton extends StatelessWidget {
 }
 
 // ──────────────────────────────────────────────
+// 已归档记忆折叠分区
+// ──────────────────────────────────────────────
+
+class _ArchivedSection extends StatefulWidget {
+  final List<MemoryEntry> memories;
+  final String keyword;
+  final String? Function(MemoryEntry m) labelFor;
+  final void Function(MemoryEntry m) onTap;
+  final void Function(MemoryEntry m) onDelete;
+
+  const _ArchivedSection({
+    required this.memories,
+    required this.keyword,
+    required this.labelFor,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  State<_ArchivedSection> createState() => _ArchivedSectionState();
+}
+
+class _ArchivedSectionState extends State<_ArchivedSection> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        onExpansionChanged: (v) => setState(() => _expanded = v),
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+        childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        leading: Icon(
+          Icons.archive_outlined,
+          size: 20,
+          color: cs.outline,
+        ),
+        title: Text(
+          '已归档记忆',
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: cs.onSurfaceVariant,
+          ),
+        ),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            '${widget.memories.length}',
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+          ),
+        ),
+        children: _expanded
+            ? [
+                for (final m in widget.memories)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _MemoryCard(
+                      memory: m,
+                      sessionLabel: widget.labelFor(m),
+                      keyword: widget.keyword,
+                      onTap: () => widget.onTap(m),
+                      onDelete: () => widget.onDelete(m),
+                    ),
+                  ),
+              ]
+            : const [],
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────
 // 记忆卡片
 // ──────────────────────────────────────────────
 
@@ -1138,6 +1558,8 @@ class _MemoryCard extends StatelessWidget {
         : isSummary
         ? '总结'
         : '手动';
+    final isArchived = memory.status == 'archived';
+    final isMerged = memory.consolidatedFrom.isNotEmpty;
 
     return Material(
       color: cs.surface,
@@ -1176,12 +1598,14 @@ class _MemoryCard extends StatelessWidget {
                     children: [
                       // 内容文本（支持关键词高亮）
                       _HighlightedText(
-                        text: memory.content,
+                        text: memory.displayContent,
                         keyword: keyword,
                         baseStyle: TextStyle(
                           fontSize: 14,
                           height: 1.55,
-                          color: cs.onSurface,
+                          color: isArchived
+                              ? cs.onSurface.withValues(alpha: 0.5)
+                              : cs.onSurface,
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -1224,6 +1648,47 @@ class _MemoryCard extends StatelessWidget {
                             ).format(memory.createdAt),
                             color: cs.onSurfaceVariant.withValues(alpha: 0.7),
                           ),
+                          // 主题徽章（最多 2 个）
+                          for (final topic in memory.topics.take(2))
+                            _MetaTag(
+                              icon: Icons.tag,
+                              text: topic,
+                              color: cs.tertiary,
+                            ),
+                          // 情感徽章
+                          if (memory.sentiment != null &&
+                              memory.sentiment != 'neutral')
+                            _MetaTag(
+                              icon: memory.sentiment == 'positive'
+                                  ? Icons.sentiment_satisfied_alt
+                                  : Icons.sentiment_dissatisfied,
+                              text: memory.sentiment == 'positive'
+                                  ? '积极'
+                                  : '消极',
+                              color: memory.sentiment == 'positive'
+                                  ? Colors.green
+                                  : Colors.redAccent,
+                            ),
+                          // 原子类型徽章
+                          if (memory.atomTypes.isNotEmpty)
+                            _MetaTag(
+                              icon: Icons.scatter_plot_outlined,
+                              text:
+                                  '${memory.atomTypes.length} 类原子',
+                              color: cs.secondary,
+                            ),
+                          if (isMerged)
+                            _MetaTag(
+                              icon: Icons.merge_type_outlined,
+                              text: '合并自 ${memory.consolidatedFrom.length} 条',
+                              color: cs.primary,
+                            ),
+                          if (isArchived)
+                            _MetaTag(
+                              icon: Icons.archive_outlined,
+                              text: '已归档',
+                              color: cs.outline,
+                            ),
                         ],
                       ),
                     ],
