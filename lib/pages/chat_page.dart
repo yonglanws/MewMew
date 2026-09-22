@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'dart:io';
-import 'dart:math' show pi, sin;
+import 'dart:math' show max, min, pi, sin;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'
+    show ClipRectLayer, LayerHandle, PaintingContext, RenderAligningShiftedBox;
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:provider/provider.dart';
@@ -14,6 +18,26 @@ import '../widgets/chat_image_preview.dart';
 import '../widgets/sticker_message_body.dart';
 import 'group_settings_page.dart';
 import 'persona_page.dart';
+
+/// 气泡伸展与跟随滚动共用的恒定像素速度：距离越长动画越久，
+/// 保证不同高度的消息把列表顶上去的视觉速度一致。
+const double _kMorphPxPerMs = 0.65;
+const Duration _kMinSizeMorphDuration = Duration(milliseconds: 180);
+const Duration _kMaxSizeMorphDuration = Duration(milliseconds: 460);
+// 跟随滚动的最短时长：太短时 easeOutCubic 的减速尾巴感知不到，
+// 会显得生硬；长距离仍按恒速 0.65px/ms 线性拉长。
+const Duration _kMinScrollDuration = Duration(milliseconds: 260);
+const Duration _kMaxScrollDuration = Duration(milliseconds: 460);
+
+/// 新气泡第一次布局的高度种子：列表高度从这里长到真实值，
+/// 绘制时按高度比例等比缩放整个气泡，中间态始终是完整的迷你对话框。
+const double _kEntranceSeedHeight = 40;
+
+Duration _speedDuration(double distancePx, Duration min, Duration max) {
+  final ms = (distancePx / _kMorphPxPerMs).round();
+  final clamped = ms.clamp(min.inMilliseconds, max.inMilliseconds);
+  return Duration(milliseconds: clamped);
+}
 
 String _formatMessageTime(DateTime time) {
   final now = DateTime.now();
@@ -106,7 +130,7 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatPageState extends State<ChatPage> {
+class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   AppState? _appState;
   final _input = TextEditingController();
   final _scroll = ScrollController();
@@ -117,6 +141,7 @@ class _ChatPageState extends State<ChatPage> {
   TextEditingValue _previousInput = TextEditingValue.empty;
   bool _applyingMentionEdit = false;
   bool _scrollScheduled = false;
+  bool _scrollAnimating = false;
   bool _followBottom = true;
   String? _followSessionId;
   int _lastMsgCount = 0;
@@ -125,6 +150,7 @@ class _ChatPageState extends State<ChatPage> {
   // 仅对后者播放入场动画，避免首屏满屏闪。
   final Set<String> _knownMessageIds = {};
   final Set<String> _pendingEntranceIds = {};
+  final Map<String, Timer> _entranceTimers = {};
   // 当前会话 id（用于切换会话时重置已知集合）
   String? _knownSessionId;
   int _knownMessageCount = 0;
@@ -296,27 +322,54 @@ class _ChatPageState extends State<ChatPage> {
     _scroll.removeListener(_onScrollChanged);
     _scroll.dispose();
     _focusNode.dispose();
+    for (final timer in _entranceTimers.values) {
+      timer.cancel();
+    }
+    _entranceTimers.clear();
     super.dispose();
   }
 
-  void _scrollToBottom({bool jump = false}) {
-    if (_scrollScheduled) return;
+  /// 跟随滚动到底部：按剩余距离以恒定像素速度滚动，
+  /// 动画进行中不重启，避免流式期间反复从头缓入。
+  void _scrollToBottom({bool settle = true}) {
+    if (_scrollAnimating || _scrollScheduled) return;
     _scrollScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollScheduled = false;
-      if (!mounted || !_scroll.hasClients) return;
-      if (!_followBottom && !jump) return;
-      const target = 0.0;
-      if (_scroll.position.pixels <= 1) return;
-      if (jump) {
-        _scroll.jumpTo(target);
-      } else {
-        _scroll.animateTo(
-          target,
-          duration: const Duration(milliseconds: 170),
-          curve: Curves.easeOutCubic,
-        );
-      }
+      if (!mounted || !_scroll.hasClients || _scrollAnimating) return;
+      if (!_followBottom) return;
+      final distance = _scroll.position.pixels;
+      if (distance <= 1) return;
+      _scrollAnimating = true;
+      _scroll
+          .animateTo(
+            0,
+            duration: _speedDuration(
+              distance,
+              _kMinScrollDuration,
+              _kMaxScrollDuration,
+            ),
+            curve: Curves.easeOutCubic,
+          )
+          .whenComplete(() {
+            _scrollAnimating = false;
+            if (!mounted ||
+                !settle ||
+                !_followBottom ||
+                !_scroll.hasClients ||
+                _scroll.position.pixels <= 1) {
+              return;
+            }
+            Future<void>.delayed(const Duration(milliseconds: 80), () {
+              if (!mounted ||
+                  !_followBottom ||
+                  !_scroll.hasClients ||
+                  _scroll.position.pixels <= 1) {
+                return;
+              }
+              _scrollToBottom(settle: false);
+            });
+          });
     });
   }
 
@@ -338,17 +391,29 @@ class _ChatPageState extends State<ChatPage> {
       _lastMsgCount = count;
       _lastContentLen = lastLen;
       if (_followBottom) {
-        _scrollToBottom(jump: true);
+        _scrollToBottom();
       }
     } else if (state.isSending && lastLen != _lastContentLen) {
       _lastContentLen = lastLen;
       if (_followBottom) {
-        _scrollToBottom(jump: true);
+        _scrollToBottom();
       }
     }
   }
 
-  /// 校验输入并提取有效的 @ 提及（位置与文本均需匹配）
+  /// Keep a newly appended message in its entrance phase long enough for the
+  /// slower bubble and scroll animations to be visible.
+  void _holdEntranceAnimation(String messageId) {
+    _entranceTimers[messageId]?.cancel();
+    _entranceTimers[messageId] = Timer(const Duration(milliseconds: 720), () {
+      _entranceTimers.remove(messageId);
+      if (!mounted) return;
+      _pendingEntranceIds.remove(messageId);
+      _knownMessageIds.add(messageId);
+      setState(() {});
+    });
+  }
+
   ({String text, List<String> mentions})? _validateInput(AppState state) {
     final text = _input.text.trim();
     if (text.isEmpty) return null;
@@ -560,6 +625,11 @@ class _ChatPageState extends State<ChatPage> {
     // 维护"已知消息 id"集合：用于区分首屏历史消息 vs 运行时新追加的消息。
     // 仅对运行时新追加的消息播放入场动画，避免首屏/切会话时满屏闪。
     if (_knownSessionId != session?.id) {
+      for (final timer in _entranceTimers.values) {
+        timer.cancel();
+      }
+      _entranceTimers.clear();
+      _pendingEntranceIds.clear();
       // 切换/首次进入会话：把当前所有 message id 视为"已知"，不播动画
       _knownSessionId = session?.id;
       _knownMessageIds
@@ -579,11 +649,18 @@ class _ChatPageState extends State<ChatPage> {
     } else {
       final currentIds = messages.map((message) => message.id).toSet();
       _knownMessageIds.removeWhere((id) => !currentIds.contains(id));
+      for (final id in _entranceTimers.keys.toList()) {
+        if (!currentIds.contains(id)) {
+          _entranceTimers.remove(id)?.cancel();
+          _pendingEntranceIds.remove(id);
+        }
+      }
       for (final message in messages) {
         if (!_knownMessageIds.contains(message.id) &&
             !_pendingEntranceIds.contains(message.id)) {
-          if (message.role == 'assistant') {
+          if (message.role == 'assistant' || message.role == 'user') {
             _pendingEntranceIds.add(message.id);
+            _holdEntranceAnimation(message.id);
           } else {
             _knownMessageIds.add(message.id);
           }
@@ -591,13 +668,6 @@ class _ChatPageState extends State<ChatPage> {
       }
       if (messages.length != _knownMessageCount) {
         _knownMessageCount = messages.length;
-      }
-      if (_pendingEntranceIds.isNotEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted || _pendingEntranceIds.isEmpty) return;
-          _knownMessageIds.addAll(_pendingEntranceIds);
-          _pendingEntranceIds.clear();
-        });
       }
     }
 
@@ -756,9 +826,10 @@ class _ChatPageState extends State<ChatPage> {
                     itemBuilder: (context, i) {
                       final originalIndex = session.messages.length - 1 - i;
                       final msg = session.messages[originalIndex];
-                      final isAI = msg.role == 'assistant';
+                      final canAnimateEntrance =
+                          msg.role == 'assistant' || msg.role == 'user';
                       final playEntrance =
-                          isAI &&
+                          canAnimateEntrance &&
                           (_pendingEntranceIds.contains(msg.id) ||
                               !_knownMessageIds.contains(msg.id));
                       return RepaintBoundary(
@@ -766,23 +837,39 @@ class _ChatPageState extends State<ChatPage> {
                         child: Column(
                           children: [
                             if (messageTimeAnchorIds.contains(msg.id))
-                              _MessageTimeDivider(time: msg.timestamp),
-                            _MessageBlock(
-                              message: msg,
-                              persona: persona,
-                              isGroup: isGroup,
-                              speaker: isGroup
-                                  ? state.personaById(msg.speakerId)
-                                  : null,
-                              isStreaming: msg.isStreaming,
-                              isSegmented: msg.isSegmented,
-                              playEntrance: playEntrance,
-                              markdownStyleSheet: markdownStyleSheet,
-                              userAvatarPath: state.userProfile.avatarPath,
-                              userName: state.userProfile.name,
-                              onLongPressSpeaker: isGroup
-                                  ? (speaker) => _insertMention(speaker)
-                                  : null,
+                              _EntranceFade(
+                                enabled: playEntrance,
+                                child: _MessageTimeDivider(time: msg.timestamp),
+                              ),
+                            // 行级入场：整条消息（含内边距）从几像素匀速长开。
+                            // 没有它，新条目会以种子高度瞬间插入，列表内容
+                            // 先瞬跳一下再平滑生长——这就是发送/接收时的闪。
+                            // 入场结束后组件常驻，只翻 enabled，避免子树重挂载。
+                            _SpeedAnimatedSize(
+                              key: ValueKey('row-entrance-${msg.id}'),
+                              vsync: this,
+                              enabled: playEntrance,
+                              seedHeight: 6,
+                              alignment: msg.role == 'user'
+                                  ? Alignment.bottomRight
+                                  : Alignment.bottomLeft,
+                              child: _MessageBlock(
+                                message: msg,
+                                persona: persona,
+                                isGroup: isGroup,
+                                speaker: isGroup
+                                    ? state.personaById(msg.speakerId)
+                                    : null,
+                                isStreaming: msg.isStreaming,
+                                isSegmented: msg.isSegmented,
+                                playEntrance: playEntrance,
+                                markdownStyleSheet: markdownStyleSheet,
+                                userAvatarPath: state.userProfile.avatarPath,
+                                userName: state.userProfile.name,
+                                onLongPressSpeaker: isGroup
+                                    ? (speaker) => _insertMention(speaker)
+                                    : null,
+                              ),
                             ),
                           ],
                         ),
@@ -914,71 +1001,78 @@ class _InputArea extends StatelessWidget {
                   },
                 ),
               ),
-            Container(
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainerHigh,
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: scheme.shadow.withValues(alpha: 0.06),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              padding: const EdgeInsets.fromLTRB(16, 6, 6, 6),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: controller,
-                      focusNode: focusNode,
-                      minLines: 1,
-                      maxLines: 6,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => onSend(),
-                      decoration: InputDecoration(
-                        hintText: hintText,
-                        hintStyle: TextStyle(color: scheme.outline),
-                        filled: false,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: 10,
+            AnimatedSize(
+              // 发送后输入框从多行塌回单行；不加缓动会让列表视口
+              // 一帧内变高，内容全体跳一下（发送时"闪一下"的来源）。
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.bottomCenter,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: scheme.shadow.withValues(alpha: 0.06),
+                      blurRadius: 10,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.fromLTRB(16, 6, 6, 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        minLines: 1,
+                        maxLines: 6,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => onSend(),
+                        decoration: InputDecoration(
+                          hintText: hintText,
+                          hintStyle: TextStyle(color: scheme.outline),
+                          filled: false,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  // 发送按钮：保持常态展示
-                  AnimatedOpacity(
-                    opacity: canSend ? 1.0 : 0.5,
-                    duration: const Duration(milliseconds: 220),
-                    child: IgnorePointer(
-                      ignoring: !canSend,
-                      child: Material(
-                        color: scheme.primary,
-                        borderRadius: BorderRadius.circular(18),
-                        child: InkWell(
+                    const SizedBox(width: 4),
+                    // 发送按钮：保持常态展示
+                    AnimatedOpacity(
+                      opacity: canSend ? 1.0 : 0.5,
+                      duration: const Duration(milliseconds: 220),
+                      child: IgnorePointer(
+                        ignoring: !canSend,
+                        child: Material(
+                          color: scheme.primary,
                           borderRadius: BorderRadius.circular(18),
-                          onTap: onSend,
-                          child: SizedBox(
-                            width: 40,
-                            height: 40,
-                            child: Icon(
-                              Icons.arrow_upward_rounded,
-                              size: 20,
-                              color: scheme.onPrimary,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(18),
+                            onTap: onSend,
+                            child: SizedBox(
+                              width: 40,
+                              height: 40,
+                              child: Icon(
+                                Icons.arrow_upward_rounded,
+                                size: 20,
+                                color: scheme.onPrimary,
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -1209,6 +1303,11 @@ class _MessageBlock extends StatelessWidget {
     final isTool = message.role == 'tool';
     final sticker = context.read<AppState>().stickerById(message.stickerId);
     final stickerUnavailable = message.stickerId != null && sticker == null;
+    final isLoading =
+        isStreaming &&
+        message.content.isEmpty &&
+        sticker == null &&
+        !stickerUnavailable;
 
     if (isTool) {
       return Padding(
@@ -1253,6 +1352,26 @@ class _MessageBlock extends StatelessWidget {
     }
 
     if (isUser) {
+      final userBubbleMaxWidth = MediaQuery.of(context).size.width * 0.74;
+      Widget userBubble(Widget child) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+        decoration: BoxDecoration(
+          color: scheme.primary,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(20),
+            topRight: Radius.circular(20),
+            bottomLeft: Radius.circular(20),
+            bottomRight: Radius.circular(6),
+          ),
+        ),
+        constraints: BoxConstraints(maxWidth: userBubbleMaxWidth),
+        child: child,
+      );
+      final userTextStyle = TextStyle(
+        color: scheme.onPrimary,
+        height: 1.4,
+        fontSize: 15,
+      );
       return Padding(
         padding: const EdgeInsets.only(bottom: 14, top: 2),
         child: Row(
@@ -1263,37 +1382,27 @@ class _MessageBlock extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 11,
-                    ),
-                    decoration: BoxDecoration(
-                      color: scheme.primary,
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(20),
-                        topRight: Radius.circular(20),
-                        bottomLeft: Radius.circular(20),
-                        bottomRight: Radius.circular(6),
-                      ),
-                    ),
-                    constraints: BoxConstraints(
-                      maxWidth: MediaQuery.of(context).size.width * 0.74,
-                    ),
-                    child: SelectableText(
-                      message.content,
-                      style: TextStyle(
-                        color: scheme.onPrimary,
-                        height: 1.4,
-                        fontSize: 15,
-                      ),
+                  _BubbleSizeMorph(
+                    key: ValueKey('bubble-morph-${message.id}'),
+                    animationId: message.id,
+                    alignment: Alignment.bottomRight,
+                    enabled: playEntrance,
+                    loadingChild: const SizedBox.shrink(),
+                    child: userBubble(
+                      SelectableText(message.content, style: userTextStyle),
                     ),
                   ),
                 ],
               ),
             ),
             const SizedBox(width: 10),
-            _UserAvatarSmall(path: userAvatarPath ?? '', name: userName ?? '我'),
+            _AvatarEntrance(
+              enabled: playEntrance,
+              child: _UserAvatarSmall(
+                path: userAvatarPath ?? '',
+                name: userName ?? '我',
+              ),
+            ),
           ],
         ),
       );
@@ -1301,25 +1410,103 @@ class _MessageBlock extends StatelessWidget {
 
     // AI 消息
     final displayPersona = isGroup ? speaker : persona;
+    Widget assistantTextBubble(Widget child) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(6),
+          topRight: Radius.circular(20),
+          bottomLeft: Radius.circular(20),
+          bottomRight: Radius.circular(20),
+        ),
+      ),
+      child: child,
+    );
+    final loadingBubble = assistantTextBubble(
+      _TypingDots(color: scheme.primary),
+    );
+    // 固定占位，避免图片解码完成后再把气泡撑一次。淡入放在
+    // frameBuilder 里：解码未就绪时不可见，首帧就绪才开始淡入，
+    // 否则图片会以当前透明度瞬间砸出来（概率性闪一下的根源）。
+    final imageContent = sticker == null
+        ? null
+        : ChatImagePreview(
+            filePath: sticker.filePath,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: SizedBox(
+                width: 120,
+                height: 120,
+                child: Image.file(
+                  File(sticker.filePath),
+                  fit: BoxFit.contain,
+                  cacheWidth: 480,
+                  frameBuilder: (context, child, frame, wasSync) {
+                    // frame == null：还没解出首帧，保持不可见；
+                    // wasSync：图在缓存里，直接显示。
+                    if (frame == null) return const SizedBox.shrink();
+                    if (wasSync) return child;
+                    return _EntranceFade(enabled: true, child: child);
+                  },
+                  errorBuilder: (_, __, ___) =>
+                      const StickerUnavailablePlaceholder(),
+                ),
+              ),
+            ),
+          );
+    // 正文渐变由 _BubbleSizeMorph 在"加载→正文"到达时刻统一处理；
+    // 这里不额外包淡入，避免双重淡入拖慢呈现。
+    final contentBubble =
+        imageContent ??
+        assistantTextBubble(
+          stickerUnavailable
+              ? const StickerUnavailablePlaceholder()
+              : _StreamingMarkdown(
+                  content: message.content,
+                  active: isStreaming && !isSegmented,
+                  child: StickerMessageBody(
+                    content: message.content,
+                    personaId: displayPersona?.id,
+                    styleSheet: markdownStyleSheet,
+                  ),
+                ),
+        );
+    final messageBubble = _SegmentedBubble(
+      key: ValueKey(message.id),
+      animationId: message.id,
+      enabled:
+          playEntrance ||
+          (isSegmented &&
+              (message.content.isNotEmpty ||
+                  sticker != null ||
+                  stickerUnavailable)),
+      loading: isLoading,
+      loadingChild: loadingBubble,
+      child: contentBubble,
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 16, top: 2),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GestureDetector(
-            onTap: displayPersona == null
-                ? null
-                : () => Navigator.push(
-                    context,
-                    FastRoute(
-                      builder: (_) =>
-                          PersonaEditorPage(persona: displayPersona),
+          _AvatarEntrance(
+            enabled: playEntrance,
+            child: GestureDetector(
+              onTap: displayPersona == null
+                  ? null
+                  : () => Navigator.push(
+                      context,
+                      FastRoute(
+                        builder: (_) =>
+                            PersonaEditorPage(persona: displayPersona),
+                      ),
                     ),
-                  ),
-            onLongPress: displayPersona == null
-                ? null
-                : () => onLongPressSpeaker?.call(displayPersona),
-            child: PersonaAvatar(persona: displayPersona, radius: 18),
+              onLongPress: displayPersona == null
+                  ? null
+                  : () => onLongPressSpeaker?.call(displayPersona),
+              child: PersonaAvatar(persona: displayPersona, radius: 18),
+            ),
           ),
           const SizedBox(width: 10),
           Flexible(
@@ -1327,81 +1514,449 @@ class _MessageBlock extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (isGroup && speaker != null)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4, bottom: 4),
-                    child: Text(
-                      speaker!.name,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: scheme.primary,
-                        fontWeight: FontWeight.w700,
+                  _EntranceFade(
+                    enabled: playEntrance,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 4, bottom: 4),
+                      child: Text(
+                        speaker!.name,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ),
-                _SegmentedBubble(
-                  key: ValueKey(message.id),
-                  enabled:
-                      playEntrance ||
-                      (isSegmented &&
-                          (message.content.isNotEmpty ||
-                              sticker != null ||
-                              stickerUnavailable)),
-                  emphasis: isSegmented,
-                  child: sticker != null
-                      ? ChatImagePreview(
-                          filePath: sticker.filePath,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(
-                                minWidth: 72,
-                                minHeight: 72,
-                                maxWidth: 160,
-                                maxHeight: 160,
-                              ),
-                              child: Image.file(
-                                File(sticker.filePath),
-                                fit: BoxFit.contain,
-                                cacheWidth: 480,
-                                errorBuilder: (_, __, ___) =>
-                                    const StickerUnavailablePlaceholder(),
-                              ),
-                            ),
-                          ),
-                        )
-                      : Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 15,
-                            vertical: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: scheme.surfaceContainerLow,
-                            borderRadius: const BorderRadius.only(
-                              topLeft: Radius.circular(6),
-                              topRight: Radius.circular(20),
-                              bottomLeft: Radius.circular(20),
-                              bottomRight: Radius.circular(20),
-                            ),
-                          ),
-                          child: stickerUnavailable
-                              ? const StickerUnavailablePlaceholder()
-                              : isStreaming && message.content.isEmpty
-                              ? _TypingDots(color: scheme.primary)
-                              : _StreamingMarkdown(
-                                  content: message.content,
-                                  active: isStreaming && !isSegmented,
-                                  child: StickerMessageBody(
-                                    content: message.content,
-                                    personaId: displayPersona?.id,
-                                    styleSheet: markdownStyleSheet,
-                                  ),
-                                ),
-                        ),
-                ),
+                messageBubble,
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 尺寸变化时按恒定像素速度插值的 AnimatedSize 替代品。
+/// 时长由本次尺寸差计算（clamp 到 [_kMinSizeMorphDuration, _kMaxSizeMorphDuration]），
+/// 使高矮不同的气泡伸展速度一致；动画中断时从当前显示尺寸续接新段。
+class _SpeedAnimatedSize extends SingleChildRenderObjectWidget {
+  const _SpeedAnimatedSize({
+    super.key,
+    required this.vsync,
+    required this.enabled,
+    this.seedHeight = _kEntranceSeedHeight,
+    this.seedOnMount = true,
+    this.alignment = Alignment.topLeft,
+    this.clipBehavior = Clip.hardEdge,
+    super.child,
+  });
+
+  final TickerProvider vsync;
+  final bool enabled;
+  final double seedHeight;
+  final bool seedOnMount;
+  final AlignmentGeometry alignment;
+  final Clip clipBehavior;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderSpeedAnimatedSize(
+      vsync: vsync,
+      alignment: alignment,
+      textDirection: Directionality.maybeOf(context),
+      enabled: enabled,
+      seedHeight: seedHeight,
+      seedOnMount: seedOnMount,
+      clipBehavior: clipBehavior,
+    );
+  }
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderSpeedAnimatedSize renderObject,
+  ) {
+    renderObject
+      ..alignment = alignment
+      ..textDirection = Directionality.maybeOf(context)
+      ..enabled = enabled
+      ..seedHeight = seedHeight
+      ..seedOnMount = seedOnMount
+      ..clipBehavior = clipBehavior;
+  }
+}
+
+class _RenderSpeedAnimatedSize extends RenderAligningShiftedBox {
+  _RenderSpeedAnimatedSize({
+    required TickerProvider vsync,
+    required bool enabled,
+    double seedHeight = _kEntranceSeedHeight,
+    bool seedOnMount = true,
+    super.alignment = Alignment.topLeft,
+    super.textDirection,
+    Clip clipBehavior = Clip.hardEdge,
+  }) : _enabled = enabled,
+       _seedHeight = seedHeight,
+       _seedOnMount = seedOnMount,
+       _clipBehavior = clipBehavior {
+    _ticker = vsync.createTicker(_onTick);
+  }
+
+  late Ticker _ticker;
+  bool _enabled;
+  Clip _clipBehavior;
+  double _seedHeight;
+  bool _seedOnMount;
+  bool _initialized = false;
+  bool _animating = false;
+  bool _hasVisualOverflow = false;
+  Size _fromSize = Size.zero;
+  Size _targetSize = Size.zero;
+  Duration _segmentStart = Duration.zero;
+  Duration _segmentDuration = Duration.zero;
+  Duration _elapsed = Duration.zero;
+  final LayerHandle<ClipRectLayer> _clipRectLayer = LayerHandle<ClipRectLayer>();
+
+  set enabled(bool value) {
+    if (_enabled == value) return;
+    _enabled = value;
+    if (!value) _stopSegment();
+    markNeedsLayout();
+  }
+
+  set seedHeight(double value) {
+    if (_seedHeight == value) return;
+    _seedHeight = value;
+    markNeedsLayout();
+  }
+
+  set seedOnMount(bool value) {
+    if (_seedOnMount == value) return;
+    _seedOnMount = value;
+    markNeedsLayout();
+  }
+
+  set clipBehavior(Clip value) {
+    if (_clipBehavior == value) return;
+    _clipBehavior = value;
+    markNeedsPaint();
+  }
+
+  void _onTick(Duration elapsed) {
+    _elapsed = elapsed;
+    if (elapsed - _segmentStart >= _segmentDuration) {
+      _stopSegment();
+    }
+    markNeedsLayout();
+  }
+
+  void _stopSegment() {
+    if (_ticker.isActive) _ticker.stop();
+    _animating = false;
+  }
+
+  void _beginSegment(Size from, Size target) {
+    _fromSize = from;
+    _targetSize = target;
+    final px = max((target.width - from.width).abs(), (target.height - from.height).abs());
+    _segmentDuration = _speedDuration(px, _kMinSizeMorphDuration, _kMaxSizeMorphDuration);
+    _segmentStart = _ticker.isActive ? _elapsed : Duration.zero;
+    if (!_ticker.isActive) _ticker.start();
+    _animating = true;
+  }
+
+  double get _progress {
+    if (!_animating) return 1.0;
+    final t =
+        (_elapsed - _segmentStart).inMicroseconds /
+        max(_segmentDuration.inMicroseconds, 1);
+    return Curves.easeOutCubic.transform(t.clamp(0.0, 1.0));
+  }
+
+  @override
+  void performLayout() {
+    _hasVisualOverflow = false;
+    final RenderBox? child = this.child;
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+    child.layout(constraints.loosen(), parentUsesSize: true);
+    final Size desired = constraints.constrain(child.size);
+
+    // 宽度直接落位（横向没有可动画的位移），只有高度参与伸展；
+    // 宽度的视觉过渡由 paint 里的等比缩放完成，气泡形状保持完整。
+    if (!_initialized) {
+      _initialized = true;
+      final seedHeight = min(desired.height, _seedHeight);
+      if (_seedOnMount && _enabled && desired.height - seedHeight >= 8) {
+        _beginSegment(Size(desired.width, seedHeight), desired);
+        size = Size(desired.width, seedHeight);
+      } else {
+        size = desired;
+      }
+    } else if (!_enabled) {
+      _stopSegment();
+      size = desired;
+    } else if (_animating && desired == _targetSize) {
+      size = Size.lerp(_fromSize, _targetSize, _progress)!;
+    } else if (desired == size) {
+      _stopSegment();
+    } else {
+      _beginSegment(size, desired);
+      size = Size.lerp(_fromSize, _targetSize, 0.0)!;
+    }
+
+    _hasVisualOverflow =
+        size.width < child.size.width || size.height < child.size.height;
+    alignChild();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final RenderBox? child = this.child;
+    if (child == null) return;
+
+    // 动画中把气泡按高度比例等比缩小绘制：中间态是形状完整的迷你
+    // 对话框（圆角一起缩放），而不是固定圆角被直角裁出的方块。
+    final double scale = _animating
+        ? (size.height / max(child.size.height, 1.0)).clamp(0.0, 1.0)
+        : 1.0;
+    if (scale < 0.999) {
+      final resolvedAlignment = alignment.resolve(textDirection);
+      final anchor = resolvedAlignment.alongSize(size);
+      // M(x) = s*x + A*(1-s)：把已按 alignChild 摆位的子气泡绕锚点等比缩放，
+      // 对齐角（用户右下 / AI 左上）在动画全程保持钉住。
+      final matrix = Matrix4.identity()
+        ..translate(anchor.dx * (1 - scale), anchor.dy * (1 - scale))
+        ..scale(scale, scale, 1.0);
+      _clipRectLayer.layer = context.pushClipRect(
+        needsCompositing,
+        offset,
+        Offset.zero & size,
+        (ctx, off) =>
+            ctx.pushTransform(needsCompositing, off, matrix, super.paint),
+        clipBehavior: _clipBehavior,
+        oldLayer: _clipRectLayer.layer,
+      );
+      return;
+    }
+
+    if (!_hasVisualOverflow || _clipBehavior == Clip.none) {
+      _clipRectLayer.layer = null;
+      super.paint(context, offset);
+      return;
+    }
+    _clipRectLayer.layer = context.pushClipRect(
+      needsCompositing,
+      offset,
+      Offset.zero & size,
+      super.paint,
+      clipBehavior: _clipBehavior,
+      oldLayer: _clipRectLayer.layer,
+    );
+  }
+
+  @override
+  void dispose() {
+    _stopSegment();
+    _ticker.dispose();
+    _clipRectLayer.layer = null;
+    super.dispose();
+  }
+}
+
+class _BubbleSizeMorph extends StatefulWidget {
+  final String animationId;
+  final bool enabled;
+  final bool loading;
+  final Alignment alignment;
+  final Widget loadingChild;
+  final Widget child;
+
+  const _BubbleSizeMorph({
+    super.key,
+    required this.animationId,
+    required this.enabled,
+    required this.loadingChild,
+    required this.child,
+    this.loading = false,
+    this.alignment = Alignment.topLeft,
+  });
+
+  @override
+  State<_BubbleSizeMorph> createState() => _BubbleSizeMorphState();
+}
+
+class _BubbleSizeMorphState extends State<_BubbleSizeMorph>
+    with TickerProviderStateMixin {
+  static const _duration = Duration(milliseconds: 460);
+
+  bool _sizeMorphActive = false;
+  // 正文渐显与入场窗口解耦：只要经历"加载→正文"的到达时刻就淡入，
+  // 否则回复超过 720ms 入场窗口时正文会瞬间砸出来（接收时闪一下）。
+  bool _revealContent = false;
+
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: _duration,
+  );
+  // 过冲幅度刻意收敛在 0.5% 内：过大会把气泡画出自身槽位，
+  // 在屏幕边缘和相邻消息上产生可见的溢出/硬切。
+  late final Animation<double> _scaleX = TweenSequence<double>([
+    TweenSequenceItem(
+      tween: Tween<double>(
+        begin: 0.975,
+        end: 0.995,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+      weight: 22,
+    ),
+    TweenSequenceItem(
+      tween: Tween<double>(
+        begin: 0.995,
+        end: 1.005,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+      weight: 56,
+    ),
+    TweenSequenceItem(
+      tween: Tween<double>(
+        begin: 1.005,
+        end: 1.0,
+      ).chain(CurveTween(curve: Curves.easeInOutCubic)),
+      weight: 22,
+    ),
+  ]).animate(_controller);
+  late final Animation<double> _scaleY = TweenSequence<double>([
+    TweenSequenceItem(
+      tween: Tween<double>(
+        begin: 0.982,
+        end: 0.997,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+      weight: 22,
+    ),
+    TweenSequenceItem(
+      tween: Tween<double>(
+        begin: 0.997,
+        end: 1.004,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+      weight: 56,
+    ),
+    TweenSequenceItem(
+      tween: Tween<double>(
+        begin: 1.004,
+        end: 1.0,
+      ).chain(CurveTween(curve: Curves.easeInOutCubic)),
+      weight: 22,
+    ),
+  ]).animate(_controller);
+  late final Animation<double> _lift = Tween<double>(
+    begin: 1.0,
+    end: 0.0,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+
+  @override
+  void initState() {
+    super.initState();
+    _beginInitialPhase();
+  }
+
+  @override
+  void didUpdateWidget(covariant _BubbleSizeMorph oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.enabled && !oldWidget.enabled) {
+      _beginInitialPhase();
+      return;
+    }
+    if (widget.loading != oldWidget.loading) {
+      _revealContent = !widget.loading;
+      if (widget.loading) {
+        _continueLoadingMorph();
+      } else {
+        _startContentMorph();
+      }
+    }
+  }
+
+  void _beginInitialPhase() {
+    if (!widget.enabled) {
+      _revealContent = false;
+      _sizeMorphActive = false;
+      _controller.value = 1.0;
+      return;
+    }
+
+    _revealContent = true;
+    _sizeMorphActive = true;
+    _controller.value = 0.0;
+    _controller.forward();
+  }
+
+  void _continueLoadingMorph() {
+    _sizeMorphActive = true;
+    if (!_controller.isAnimating && _controller.value < 1.0) {
+      _controller.forward();
+    }
+  }
+
+  void _startContentMorph() {
+    _sizeMorphActive = true;
+    if (!_controller.isAnimating && _controller.value < 1.0) {
+      _controller.forward();
+    }
+  }
+
+  Widget _visibleChild() {
+    if (widget.loading) return widget.loadingChild;
+    // 打字圆点必须立即出现，不参与淡入；正文一律带透明渐变。
+    return _EntranceFade(
+      enabled: widget.enabled || _revealContent,
+      scaleFrom: 0.92,
+      child: widget.child,
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    if (disableAnimations) {
+      return widget.loading ? widget.loadingChild : widget.child;
+    }
+
+    // 尺寸组件与缩放层都必须常驻：动画结束时若把内容子树换回裸节点，
+    // 子树会被拆掉重建（图片流、选择器状态全丢），正是"动画结束的
+    // 瞬间闪一下"的来源。结束后只是控制器停在恒等值，不再有布局开销。
+    return _SpeedAnimatedSize(
+      key: ValueKey('bubble-morph-size-${widget.animationId}'),
+      vsync: this,
+      enabled: _sizeMorphActive,
+      seedOnMount: false,
+      alignment: widget.alignment,
+      clipBehavior: Clip.hardEdge,
+      child: AnimatedBuilder(
+        animation: _controller,
+        child: _visibleChild(),
+        builder: (_, child) => Transform.translate(
+          offset: Offset(0, _lift.value),
+          child: Transform(
+            key: ValueKey('bubble-morph-transform-${widget.animationId}'),
+            alignment: widget.alignment,
+            transform: Matrix4.diagonal3Values(
+              _scaleX.value,
+              _scaleY.value,
+              1.0,
+            ),
+            child: child,
+          ),
+        ),
       ),
     );
   }
@@ -1419,91 +1974,102 @@ class _StreamingMarkdown extends StatelessWidget {
   });
 
   @override
-  @override
   Widget build(BuildContext context) {
     return child;
   }
 }
 
-/// 气泡出现动画：在 widget 首次创建时播一次入场。
-/// - `enabled=false`：完全不播（历史消息或非新追加消息）
-/// - `enabled=true` + `emphasis=true`（分段态）：更明显的淡入 + 上移 + 缩放
-/// - `enabled=true` + `emphasis=false`（普通流式/新追加）：更轻快的淡入 + 微上移
-class _SegmentedBubble extends StatefulWidget {
+/// 文字和表情包共用的入场与尺寸形变。
+/// 已经有正文或图片时直接从紧凑尺寸长出来，不再先闪一帧加载圆点。
+class _SegmentedBubble extends StatelessWidget {
+  final String animationId;
   final bool enabled;
-  final bool emphasis;
+  final bool loading;
+  final Widget loadingChild;
   final Widget child;
+
   const _SegmentedBubble({
     super.key,
+    required this.animationId,
     required this.enabled,
-    this.emphasis = false,
+    required this.loadingChild,
     required this.child,
+    this.loading = false,
   });
 
   @override
-  State<_SegmentedBubble> createState() => _SegmentedBubbleState();
+  Widget build(BuildContext context) {
+    return _BubbleSizeMorph(
+      key: ValueKey('bubble-morph-$animationId'),
+      animationId: animationId,
+      enabled: enabled,
+      loading: loading,
+      loadingChild: loadingChild,
+      child: child,
+    );
+  }
 }
 
-class _SegmentedBubbleState extends State<_SegmentedBubble>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: Duration(milliseconds: widget.emphasis ? 330 : 280),
-  );
-  late final Animation<double> _curve = _controller.drive(
-    CurveTween(curve: Curves.easeOutCubic),
-  );
-  late final Animation<double> _fade = _controller
-      .drive(
-        CurveTween(curve: const Interval(0.0, 0.62, curve: Curves.easeOut)),
-      )
-      .drive(Tween<double>(begin: 0.0, end: 1.0));
-  late final Animation<Offset> _slide = Tween<Offset>(
-    begin: Offset(widget.emphasis ? -0.008 : 0, widget.emphasis ? 0.045 : 0.02),
-    end: Offset.zero,
-  ).animate(_curve);
-  late final Animation<double> _scale = Tween<double>(
-    begin: widget.emphasis ? 0.98 : 0.99,
-    end: 1.0,
-  ).animate(_curve);
+/// 入场淡入。用 tween 切换代替子树切换：enabled 翻转只改起点值，
+/// 内容子树永远不重建（重建会让图片流、选择器状态丢失，结束时闪一下）。
+/// 历史消息从 (1→1) 挂载，无动画；入场结束翻 false 时从当前值续到 1，
+/// 不会打断在途的淡入。[scaleFrom] 大于 0 时附带轻微放大。
+class _EntranceFade extends StatelessWidget {
+  final bool enabled;
+  final double scaleFrom;
+  final Widget child;
 
-  @override
-  void initState() {
-    super.initState();
-    if (widget.enabled) {
-      _controller.forward();
-    } else {
-      _controller.value = 1.0;
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _SegmentedBubble oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.enabled && !oldWidget.enabled) {
-      _controller.forward(from: 0.0);
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  const _EntranceFade({
+    required this.enabled,
+    required this.child,
+    this.scaleFrom = 1.0,
+  });
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.enabled) return widget.child;
-    return FadeTransition(
-      opacity: _fade,
-      child: SlideTransition(
-        position: _slide,
-        child: ScaleTransition(
-          scale: _scale,
-          alignment: Alignment.topLeft,
-          child: widget.child,
+    final scaled = scaleFrom < 0.999;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: enabled ? 0.0 : 1.0, end: 1.0),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+      builder: (_, value, child) {
+        final t = value.clamp(0.0, 1.0);
+        final opacity = Opacity(opacity: t, child: child);
+        return scaled
+            ? Transform.scale(
+                scale: scaleFrom + (1 - scaleFrom) * t,
+                child: opacity,
+              )
+            : opacity;
+      },
+      child: child,
+    );
+  }
+}
+
+/// 头像入场：淡入 + easeOutBack 轻微过冲放大，与气泡伸展同帧开始。
+/// 结构同 [_EntranceFade]：enabled 翻转不重建子树。
+class _AvatarEntrance extends StatelessWidget {
+  final bool enabled;
+  final Widget child;
+
+  const _AvatarEntrance({required this.enabled, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: enabled ? 0.0 : 1.0, end: 1.0),
+      duration: const Duration(milliseconds: 360),
+      curve: Curves.easeOutCubic,
+      builder: (_, value, child) => Opacity(
+        opacity: value.clamp(0.0, 1.0),
+        child: Transform.scale(
+          // easeOutBack 的过冲压到 +3% 以内，避免头像画出消息行。
+          scale: 0.62 + 0.38 * Curves.easeOutBack.transform(value.clamp(0, 1)),
+          child: child,
         ),
       ),
+      child: child,
     );
   }
 }
