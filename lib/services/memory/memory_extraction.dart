@@ -113,10 +113,7 @@ String buildExtractionUserPrompt({
 }
 
 /// LLM 原始输出 → ExtractionResult（解析级联 + 归一化 + 质量门）
-ExtractionResult parseExtractionResponse(
-  String raw, {
-  required bool isGroup,
-}) {
+ExtractionResult parseExtractionResponse(String raw, {required bool isGroup}) {
   final parsed = _extractJson(raw, isGroup);
   return _toResult(parsed, isGroup);
 }
@@ -191,28 +188,25 @@ Map<String, dynamic>? _extractByRegexBlock(String text) {
 
 /// 逐字段正则兜底
 Map<String, dynamic>? _extractByFieldRegex(String text) {
-  final summaryMatch =
-      RegExp(r'"summary"\s*:\s*"([^"]+)"').firstMatch(text);
+  final summaryMatch = RegExp(r'"summary"\s*:\s*"([^"]+)"').firstMatch(text);
   if (summaryMatch == null) return null;
   final parsed = <String, dynamic>{'summary': summaryMatch.group(1)!};
 
-  final importanceMatch =
-      RegExp(r'"importance"\s*:\s*([0-9.]+)').firstMatch(text);
+  final importanceMatch = RegExp(
+    r'"importance"\s*:\s*([0-9.]+)',
+  ).firstMatch(text);
   if (importanceMatch != null) {
     final v = double.tryParse(importanceMatch.group(1)!);
     if (v != null) parsed['importance'] = v;
   }
-  final sentimentMatch =
-      RegExp(r'"sentiment"\s*:\s*"(\w+)"').firstMatch(text);
+  final sentimentMatch = RegExp(r'"sentiment"\s*:\s*"(\w+)"').firstMatch(text);
   if (sentimentMatch != null) parsed['sentiment'] = sentimentMatch.group(1);
   for (final field in ['topics', 'key_facts', 'participants']) {
-    final arrayMatch =
-        RegExp('"$field"\\s*:\\s*\\[(.*?)\\]').firstMatch(text);
+    final arrayMatch = RegExp('"$field"\\s*:\\s*\\[(.*?)\\]').firstMatch(text);
     if (arrayMatch != null) {
-      final items = RegExp(r'"([^"]*)"')
-          .allMatches(arrayMatch.group(1)!)
-          .map((m) => m.group(1)!)
-          .toList();
+      final items = RegExp(
+        r'"([^"]*)"',
+      ).allMatches(arrayMatch.group(1)!).map((m) => m.group(1)!).toList();
       if (items.isNotEmpty) parsed[field] = items;
     }
   }
@@ -220,17 +214,21 @@ Map<String, dynamic>? _extractByFieldRegex(String text) {
 }
 
 Map<String, dynamic> _defaultParsed(bool isGroup) => {
-      'summary': '对话记录',
-      'topics': <String>[],
-      'key_facts': <String>[],
-      if (isGroup) 'participants': <String>[],
-      'sentiment': 'neutral',
-      'importance': 0.5,
-    };
+  'summary': '对话记录',
+  'topics': <String>[],
+  'key_facts': <String>[],
+  if (isGroup) 'participants': <String>[],
+  'sentiment': 'neutral',
+  'importance': 0.5,
+};
 
 List<String> _ensureList(dynamic raw, {int cap = 5}) {
   if (raw is List) {
-    return raw.map((e) => e.toString().trim()).where((s) => s.isNotEmpty).take(cap).toList();
+    return raw
+        .map((e) => e.toString().trim())
+        .where((s) => s.isNotEmpty)
+        .take(cap)
+        .toList();
   }
   return const [];
 }
@@ -239,7 +237,9 @@ ExtractionResult _toResult(Map<String, dynamic> parsed, bool isGroup) {
   final summary = (parsed['summary'] ?? '').toString();
   final topics = _ensureList(parsed['topics']);
   final keyFacts = _ensureList(parsed['key_facts']);
-  final participants = isGroup ? _ensureList(parsed['participants'], cap: 20) : const <String>[];
+  final participants = isGroup
+      ? _ensureList(parsed['participants'], cap: 20)
+      : const <String>[];
 
   var sentiment = (parsed['sentiment'] ?? 'neutral').toString();
   if (!const {'positive', 'neutral', 'negative'}.contains(sentiment)) {
@@ -292,9 +292,7 @@ String validateSummaryQuality({
     // 原版判定"非数值或不在 [0,1]"——归一化后 0/1 边界视为可疑
     if (importance == 0.0 || importance == 1.0) return 'low';
   }
-  const genericTerms = [
-    '某用户', '有人', '某人', '用户说', '对方说', '群成员', '某群成员',
-  ];
+  const genericTerms = ['某用户', '有人', '某人', '用户说', '对方说', '群成员', '某群成员'];
   for (final term in genericTerms) {
     if (summary.contains(term)) return 'low';
   }
@@ -306,13 +304,19 @@ String validateSummaryQuality({
 ({List<String> timeTags, String? sourceTimeLabel}) buildSourceTimeTags(
   List<ExtractionMessage> messages,
 ) {
-  if (messages.isEmpty) return (timeTags: const <String>[], sourceTimeLabel: null);
-  final dates = messages
-      .map((m) =>
-          '${m.timestamp.year}-${_two(m.timestamp.month)}-${_two(m.timestamp.day)}')
-      .toSet()
-      .toList()
-    ..sort();
-  final label = dates.length == 1 ? dates.first : '${dates.first} - ${dates.last}';
+  if (messages.isEmpty)
+    return (timeTags: const <String>[], sourceTimeLabel: null);
+  final dates =
+      messages
+          .map(
+            (m) =>
+                '${m.timestamp.year}-${_two(m.timestamp.month)}-${_two(m.timestamp.day)}',
+          )
+          .toSet()
+          .toList()
+        ..sort();
+  final label = dates.length == 1
+      ? dates.first
+      : '${dates.first} - ${dates.last}';
   return (timeTags: dates, sourceTimeLabel: label);
 }

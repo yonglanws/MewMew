@@ -206,13 +206,14 @@ const String consolidationSystemPrompt =
 String buildConsolidationUserPrompt(List<Map<String, dynamic>> items) {
   final buf = StringBuffer();
   buf.writeln('以下是一组需要合并的记忆（共 ${items.length} 条）：');
-  buf.writeln(items
-      .map((e) => const JsonEncoder.withIndent('  ').convert(e))
-      .join('\n'));
+  buf.writeln(
+    items.map((e) => const JsonEncoder.withIndent('  ').convert(e)).join('\n'),
+  );
   buf.writeln();
   buf.writeln('请将它们合并为一条记忆，按如下 JSON 格式输出：');
   buf.writeln(
-      '{"summary": "合并后的精炼摘要", "key_facts": ["事实1", "事实2"], "topics": ["主题1"], "importance": 0.5}');
+    '{"summary": "合并后的精炼摘要", "key_facts": ["事实1", "事实2"], "topics": ["主题1"], "importance": 0.5}',
+  );
   return buf.toString();
 }
 

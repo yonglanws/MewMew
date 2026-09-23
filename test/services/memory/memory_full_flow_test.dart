@@ -41,11 +41,11 @@ void main() {
   }
 
   ChatMessage msg(String role, String text) => ChatMessage(
-        id: 'msg-${DateTime.now().microsecondsSinceEpoch}-$role-$text',
-        role: role,
-        content: text,
-        timestamp: DateTime.now(),
-      );
+    id: 'msg-${DateTime.now().microsecondsSinceEpoch}-$role-$text',
+    role: role,
+    content: text,
+    timestamp: DateTime.now(),
+  );
 
   /// 两条消息一轮，共 [rounds] 轮
   List<ChatMessage> conversation(int rounds) {
@@ -60,31 +60,31 @@ void main() {
   }
 
   String extractionResponseJson() => jsonEncode({
-        'summary': '用户分享了养猫日常，并强调自己不吃香菜',
-        'canonical_summary': '用户养了一只叫咪咪的猫，不吃香菜',
-        'topics': ['宠物', '饮食'],
-        'key_facts': ['用户养了一只叫咪咪的猫', '用户不吃香菜'],
-        'participants': ['用户'],
-        'sentiment': 'positive',
-        'importance': 0.7,
-      });
+    'summary': '用户分享了养猫日常，并强调自己不吃香菜',
+    'canonical_summary': '用户养了一只叫咪咪的猫，不吃香菜',
+    'topics': ['宠物', '饮食'],
+    'key_facts': ['用户养了一只叫咪咪的猫', '用户不吃香菜'],
+    'participants': ['用户'],
+    'sentiment': 'positive',
+    'importance': 0.7,
+  });
 
   String mergeResponseJson() => jsonEncode({
-        'summary': '用户的生活偏好：养猫、不吃香菜（多条旧记忆合并）',
-        'key_facts': ['用户养猫', '用户不吃香菜'],
-        'topics': ['宠物', '饮食'],
-        'importance': 0.6,
-      });
+    'summary': '用户的生活偏好：养猫、不吃香菜（多条旧记忆合并）',
+    'key_facts': ['用户养猫', '用户不吃香菜'],
+    'topics': ['宠物', '饮食'],
+    'importance': 0.6,
+  });
 
   group('记忆系统全流程（提取 → 存储 → 检索 → 注入）', () {
     test('端到端：滑窗触发提取，产生记忆+原子+图谱，检索命中并可注入', () async {
       final extractionCalls = <String>[];
       final state = await buildState(
-        taskRunner: (
-            {required config, required system, required user, model}) async {
-          extractionCalls.add(system);
-          return (extractionResponseJson(), 120, 60);
-        },
+        taskRunner:
+            ({required config, required system, required user, model}) async {
+              extractionCalls.add(system);
+              return (extractionResponseJson(), 120, 60);
+            },
       );
       state.memorySettings = state.memorySettings.copyWith(summaryThreshold: 2);
       attachFakeApi(state);
@@ -107,8 +107,9 @@ void main() {
       expect(memory.sourceTimeLabel, isNotNull);
 
       // 记忆原子
-      final atoms =
-          state.memoryAtoms.where((a) => a.parentMemoryId == memory.id).toList();
+      final atoms = state.memoryAtoms
+          .where((a) => a.parentMemoryId == memory.id)
+          .toList();
       expect(atoms, hasLength(2));
       expect(memory.atomTypes, isNotEmpty);
 
@@ -144,14 +145,21 @@ void main() {
     test('嵌入 seam：配置嵌入 API 后提取自动回填向量、检索走向量路径', () async {
       final embedRequests = <String>[];
       final state = await buildState(
-        taskRunner: (
-            {required config, required system, required user, model}) async =>
-            (extractionResponseJson(), 120, 60),
-        embedder: (
-            {required baseUrl, required apiKey, required model, required text}) async {
-          embedRequests.add(text);
-          return EmbeddingResult(embedding: [0.2, 0.4, text.length / 100.0]);
-        },
+        taskRunner:
+            ({required config, required system, required user, model}) async =>
+                (extractionResponseJson(), 120, 60),
+        embedder:
+            ({
+              required baseUrl,
+              required apiKey,
+              required model,
+              required text,
+            }) async {
+              embedRequests.add(text);
+              return EmbeddingResult(
+                embedding: [0.2, 0.4, text.length / 100.0],
+              );
+            },
       );
       state.embeddingApiConfig = EmbeddingApiConfig(
         baseUrl: 'http://embedding.local',
@@ -208,8 +216,9 @@ void main() {
           expiresAt: DateTime.now().subtract(const Duration(days: 10)),
         ),
       );
-      state.memoryMaintenanceState['lastDecayDate'] =
-          DateTime.now().subtract(const Duration(days: 2)).toIso8601String();
+      state.memoryMaintenanceState['lastDecayDate'] = DateTime.now()
+          .subtract(const Duration(days: 2))
+          .toIso8601String();
 
       await state.runMemoryMaintenance();
 
@@ -224,11 +233,11 @@ void main() {
     test('整理合并：LLM 合并后原件归档、生成带原子的合并产物', () async {
       final systems = <String>[];
       final state = await buildState(
-        taskRunner: (
-            {required config, required system, required user, model}) async {
-          systems.add(system);
-          return (mergeResponseJson(), 90, 40);
-        },
+        taskRunner:
+            ({required config, required system, required user, model}) async {
+              systems.add(system);
+              return (mergeResponseJson(), 90, 40);
+            },
       );
       state.memorySettings = state.memorySettings.copyWith(
         consolidationEnabled: true,
@@ -297,8 +306,9 @@ void main() {
         topics: ['作息'],
       );
 
-      final newAtoms =
-          state.memoryAtoms.where((a) => a.parentMemoryId == memory.id);
+      final newAtoms = state.memoryAtoms.where(
+        (a) => a.parentMemoryId == memory.id,
+      );
       expect(newAtoms, hasLength(1));
       expect(newAtoms.first.content, '张三讨厌早起');
       expect(oldAtomIds.contains(newAtoms.first.id), isFalse);
@@ -308,10 +318,7 @@ void main() {
       // 仅改主题：原子保持不变
       final atomsBefore = state.memoryAtoms.map((a) => a.id).toSet();
       await state.updateMemoryFull(memory.id, topics: ['作息', '电影']);
-      expect(
-        state.memoryAtoms.map((a) => a.id).toSet(),
-        atomsBefore,
-      );
+      expect(state.memoryAtoms.map((a) => a.id).toSet(), atomsBefore);
       expect(memory.topics, ['作息', '电影']);
     });
 

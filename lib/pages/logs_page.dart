@@ -73,7 +73,6 @@ class _LogsPageState extends State<LogsPage> {
       // 仅改 FAB 显隐，用轻量 setState 而非整页重建
       _queueStateUpdate();
     }
-
   }
 
   @override
@@ -147,9 +146,7 @@ class _LogsPageState extends State<LogsPage> {
     void attempt(int frame) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (_autoScroll &&
-            _scrollCtrl.hasClients &&
-            _filteredList.isNotEmpty) {
+        if (_autoScroll && _scrollCtrl.hasClients && _filteredList.isNotEmpty) {
           _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
         }
         if (frame < 3) {
@@ -159,6 +156,7 @@ class _LogsPageState extends State<LogsPage> {
         }
       });
     }
+
     attempt(0);
   }
 
@@ -198,8 +196,9 @@ class _LogsPageState extends State<LogsPage> {
           IconButton(
             icon: const Icon(Icons.ios_share_outlined, size: 20),
             tooltip: '导出',
-            onPressed:
-                list.isEmpty ? null : () => _showExportMenu(context, logger),
+            onPressed: list.isEmpty
+                ? null
+                : () => _showExportMenu(context, logger),
           ),
           IconButton(
             icon: const Icon(Icons.delete_sweep_outlined, size: 20),
@@ -392,9 +391,9 @@ class _LogsPageState extends State<LogsPage> {
                 ),
               );
               Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已复制详细日志')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('已复制详细日志')));
             },
             child: const Text('复制'),
           ),
@@ -431,7 +430,7 @@ class _LogsPageState extends State<LogsPage> {
     );
     if (ok == true && mounted) {
       await LoggerService.instance.clear();
-      log.i('app', '用户手动清空了日志');
+      Log.i('app', '用户手动清空了日志');
     }
   }
 
@@ -457,8 +456,8 @@ class _LogsPageState extends State<LogsPage> {
                       Text(
                         '导出日志',
                         style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       const Spacer(),
                       Text(
@@ -532,7 +531,7 @@ class _LogsPageState extends State<LogsPage> {
         duration: const Duration(seconds: 2),
       ),
     );
-    log.i('app', '复制 ${logger.logs.length} 条日志到剪贴板');
+    Log.i('app', '复制 ${logger.logs.length} 条日志到剪贴板');
   }
 
   void _exportAndShare(LoggerService logger, LogExportFormat format) async {
@@ -543,10 +542,10 @@ class _LogsPageState extends State<LogsPage> {
         XFile(file.path),
       ], subject: 'mewmew 运行日志');
       if (result.status == ShareResultStatus.success) {
-        log.i('app', '导出 ${logger.logs.length} 条日志（${format.label}）并分享成功');
+        Log.i('app', '导出 ${logger.logs.length} 条日志（${format.label}）并分享成功');
       }
     } catch (e, s) {
-      log.e('app', '导出日志失败', error: e, stackTrace: s);
+      Log.e('app', '导出日志失败', error: e, stackTrace: s);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('导出失败：$e'), behavior: SnackBarBehavior.floating),
@@ -642,12 +641,14 @@ class _LevelChip extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: FilterChip(
-        label: Text('$label $count',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-              color: isSelected ? c : cs.onSurfaceVariant,
-            )),
+        label: Text(
+          '$label $count',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+            color: isSelected ? c : cs.onSurfaceVariant,
+          ),
+        ),
         selected: isSelected,
         onSelected: (_) => onTap(),
         selectedColor: c.withValues(alpha: 0.15),
@@ -821,8 +822,10 @@ class _SearchBarState extends State<_SearchBar> {
             fillColor: _focused
                 ? cs.primaryContainer.withValues(alpha: 0.12)
                 : cs.surfaceContainerHighest.withValues(alpha: 0.4),
-            contentPadding:
-                const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              vertical: 10,
+              horizontal: 12,
+            ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
               borderSide: BorderSide(
@@ -980,9 +983,9 @@ class _EmptyState extends StatelessWidget {
             const SizedBox(height: 20),
             Text(
               '暂无日志记录',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 6),
             Text(
@@ -1002,8 +1005,8 @@ class _EmptyState extends StatelessWidget {
 // ──────────────────────────────────────────────
 
 Color _levelColor(LogLevel l) => switch (l) {
-      LogLevel.debug => const Color(0xFF8B9AAF),
-      LogLevel.info => const Color(0xFF3B82F6),
-      LogLevel.warning => const Color(0xFFF59E0B),
-      LogLevel.error => const Color(0xFFEF4444),
-    };
+  LogLevel.debug => const Color(0xFF8B9AAF),
+  LogLevel.info => const Color(0xFF3B82F6),
+  LogLevel.warning => const Color(0xFFF59E0B),
+  LogLevel.error => const Color(0xFFEF4444),
+};

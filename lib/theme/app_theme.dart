@@ -24,12 +24,10 @@ class AppTheme {
   static ThemeData? _darkTheme;
 
   /// 获取浅色主题（带缓存）
-  static ThemeData lightTheme() =>
-      _lightTheme ??= theme(Brightness.light);
+  static ThemeData lightTheme() => _lightTheme ??= theme(Brightness.light);
 
   /// 获取深色主题（带缓存）
-  static ThemeData darkTheme() =>
-      _darkTheme ??= theme(Brightness.dark);
+  static ThemeData darkTheme() => _darkTheme ??= theme(Brightness.dark);
 
   static ThemeData theme(Brightness brightness) {
     final scheme = ColorScheme.fromSeed(
@@ -83,10 +81,7 @@ class AppTheme {
             ? Colors.white
             : const Color(0xFF1C1C26),
       ),
-      dividerTheme: const DividerThemeData(
-        space: 1,
-        thickness: 1,
-      ),
+      dividerTheme: const DividerThemeData(space: 1, thickness: 1),
       listTileTheme: ListTileThemeData(
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(radiusMd),
@@ -110,8 +105,10 @@ class AppTheme {
           borderRadius: BorderRadius.circular(radiusMd),
           borderSide: BorderSide(color: scheme.primary, width: 1.5),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 12,
+        ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(

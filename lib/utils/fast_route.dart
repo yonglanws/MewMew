@@ -23,9 +23,28 @@ class FastRoute<T> extends MaterialPageRoute<T> {
       Tween<Offset>(begin: const Offset(0.035, 0.0), end: Offset.zero),
     );
     final fade = curvedAnimation.drive(Tween<double>(begin: 0.0, end: 1.0));
-    return FadeTransition(
-      opacity: fade,
-      child: SlideTransition(position: slide, child: child),
+    // 二级转场：上层页面推入时，本页（底层）轻微向左视差滑动并压暗一点，
+    // 返回时反向恢复——推入/返回的过渡更连续，不再生硬切换。
+    final parallax = secondaryAnimation.drive(
+      Tween<Offset>(
+        begin: Offset.zero,
+        end: const Offset(-0.03, 0.0),
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
+    );
+    final dim = secondaryAnimation.drive(
+      Tween<double>(begin: 0.0, end: 0.12).chain(
+        CurveTween(curve: Curves.easeOutCubic),
+      ),
+    );
+    return SlideTransition(
+      position: parallax,
+      child: FadeTransition(
+        opacity: Tween<double>(begin: 1.0, end: 1.0 - 0.12).animate(dim),
+        child: FadeTransition(
+          opacity: fade,
+          child: SlideTransition(position: slide, child: child),
+        ),
+      ),
     );
   }
 }

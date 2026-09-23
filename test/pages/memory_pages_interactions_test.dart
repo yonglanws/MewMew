@@ -13,10 +13,7 @@ import 'package:mewmew/theme/app_theme.dart';
 Widget _host(AppState state, Widget page) {
   return MaterialApp(
     theme: AppTheme.lightTheme(),
-    home: ChangeNotifierProvider<AppState>.value(
-      value: state,
-      child: page,
-    ),
+    home: ChangeNotifierProvider<AppState>.value(value: state, child: page),
   );
 }
 
@@ -39,10 +36,9 @@ Matrix4 _matrixOf(WidgetTester tester) =>
     (_graphPaint(tester).painter as dynamic).matrix as Matrix4;
 
 /// 画布 RenderBox：局部坐标 → 全局坐标转换用（tapAt 接收全局坐标）
-RenderBox _graphBox(WidgetTester tester) =>
-    tester.renderObject<RenderBox>(
-      find.byWidgetPredicate((w) => w is CustomPaint && w.painter != null),
-    );
+RenderBox _graphBox(WidgetTester tester) => tester.renderObject<RenderBox>(
+  find.byWidgetPredicate((w) => w is CustomPaint && w.painter != null),
+);
 
 Map<String, List<double>> _positionsOf(WidgetTester tester) =>
     (_graphPaint(tester).painter as dynamic).positions
@@ -54,10 +50,9 @@ Offset _blankPoint(WidgetTester tester, Size size) {
   final scale = matrix.getMaxScaleOnAxis();
   final tx = matrix.storage[12];
   final ty = matrix.storage[13];
-  final nodes = _positionsOf(tester)
-      .values
-      .map((p) => Offset(p[0] * scale + tx, p[1] * scale + ty))
-      .toList();
+  final nodes = _positionsOf(
+    tester,
+  ).values.map((p) => Offset(p[0] * scale + tx, p[1] * scale + ty)).toList();
   Offset best = Offset.zero;
   var bestDistance = -1.0;
   for (final candidate in [
@@ -95,8 +90,10 @@ void main() {
       final matrix = _matrixOf(tester);
       final scale = matrix.getMaxScaleOnAxis();
       final p = _positionsOf(tester).values.first;
-      final nodeLocal =
-          Offset(p[0] * scale + matrix.storage[12], p[1] * scale + matrix.storage[13]);
+      final nodeLocal = Offset(
+        p[0] * scale + matrix.storage[12],
+        p[1] * scale + matrix.storage[13],
+      );
       final nodeScreen = _graphBox(tester).localToGlobal(nodeLocal);
 
       await tester.tapAt(nodeScreen);
@@ -135,7 +132,10 @@ void main() {
       expect(mid, lessThan(before * 1.8));
 
       await tester.pumpAndSettle();
-      expect(_matrixOf(tester).getMaxScaleOnAxis(), closeTo(before * 1.8, 0.001));
+      expect(
+        _matrixOf(tester).getMaxScaleOnAxis(),
+        closeTo(before * 1.8, 0.001),
+      );
 
       await tester.pump(const Duration(seconds: 2));
     });
@@ -178,8 +178,9 @@ void main() {
     testWidgets('回车与分隔符输入生成芯片、可删除、保存无需手动分隔', (tester) async {
       final state = await buildState();
       // 全局模式：AppBar 常驻「添加记忆」按钮（隔离模式下需先选中人物）
-      state.memorySettings =
-          state.memorySettings.copyWith(memoryScopeMode: 'global');
+      state.memorySettings = state.memorySettings.copyWith(
+        memoryScopeMode: 'global',
+      );
       await tester.pumpWidget(_host(state, const MemoryPage()));
       await tester.pumpAndSettle();
 
@@ -209,10 +210,12 @@ void main() {
 
       // 删除「宠物」芯片
       await tester.tap(
-        find.descendant(
-          of: find.byType(InputChip),
-          matching: find.byIcon(Icons.close),
-        ).first,
+        find
+            .descendant(
+              of: find.byType(InputChip),
+              matching: find.byIcon(Icons.close),
+            )
+            .first,
       );
       await tester.pumpAndSettle();
       expect(find.byType(InputChip), findsNWidgets(2));
@@ -250,6 +253,9 @@ void main() {
       expect(find.text('0-1'), findsOneWidget);
       expect(find.text('9-10'), findsOneWidget);
 
+      // 可跳转统计框带右上角跳转符号（总记忆/活跃/已归档/图谱节点）
+      expect(find.byIcon(Icons.north_east_rounded), findsNWidgets(4));
+
       // 柱体几何：至少一根柱子宽高都 > 0（防止无 child 组件收缩为 0 不可见）
       final barSizes = find
           .byWidgetPredicate(
@@ -282,8 +288,14 @@ void main() {
       // 原子类型图例：至少出现一种类型标签
       expect(state.memoryAtoms, isNotEmpty);
       expect(
-        ['事实', '情节', '关系', '偏好', '计划', '未分类']
-            .any((l) => find.textContaining(l).evaluate().isNotEmpty),
+        [
+          '事实',
+          '情节',
+          '关系',
+          '偏好',
+          '计划',
+          '未分类',
+        ].any((l) => find.textContaining(l).evaluate().isNotEmpty),
         isTrue,
       );
       // 整理面板已删除

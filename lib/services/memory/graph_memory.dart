@@ -21,10 +21,8 @@ String graphNodeKey(GraphNodeType type, String canonicalValue) =>
 /// 实体名规范化（照抄 entity_resolver.canonicalize）
 String canonicalizeEntity(String raw) {
   var t = raw.trim();
-  t = t.replaceAll(
-      RegExp('^[、，。！？；：\u201c\u201d\u2018\u2019\\s]+'), '');
-  t = t.replaceAll(
-      RegExp('[、，。！？；：\u201c\u201d\u2018\u2019\\s]\$'), '');
+  t = t.replaceAll(RegExp('^[、，。！？；：\u201c\u201d\u2018\u2019\\s]+'), '');
+  t = t.replaceAll(RegExp('[、，。！？；：\u201c\u201d\u2018\u2019\\s]\$'), '');
   t = t.replaceAll(RegExp(r'\s+'), ' ');
   if (t.runes.every((c) => c < 0x80)) t = t.toLowerCase();
   return t;
@@ -97,7 +95,8 @@ class GraphEntry {
 class GraphSearchHit {
   final String sourceMemoryId;
   final double score;
-  final String matchSource; // direct / node_expansion / edge_neighbor / second_hop
+  final String
+  matchSource; // direct / node_expansion / edge_neighbor / second_hop
 
   const GraphSearchHit({
     required this.sourceMemoryId,
@@ -115,7 +114,8 @@ class GraphMemoryStore {
   final Map<String, Set<String>> _entryKeysByMemory = {};
   final Map<String, Set<String>> _edgesByMemory = {};
   final Map<String, Set<String>> _entriesByNode = {}; // nodeKey -> entryKeys
-  final Map<String, Map<String, double>> _neighbors = {}; // nodeKey -> neighbor -> weight
+  final Map<String, Map<String, double>> _neighbors =
+      {}; // nodeKey -> neighbor -> weight
 
   int get nodeCount => nodes.length;
   int get edgeCount => edges.length;
@@ -134,12 +134,14 @@ class GraphMemoryStore {
       final canonical = canonicalizeEntity(p);
       if (canonical.isEmpty) continue;
       final key = graphNodeKey(GraphNodeType.person, canonical);
-      _upsertNode(GraphNode(
-        key: key,
-        type: GraphNodeType.person,
-        value: p,
-        canonicalValue: canonical,
-      ));
+      _upsertNode(
+        GraphNode(
+          key: key,
+          type: GraphNodeType.person,
+          value: p,
+          canonicalValue: canonical,
+        ),
+      );
       personKeys.add(key);
     }
 
@@ -147,54 +149,66 @@ class GraphMemoryStore {
       final factCanonical = canonicalizeEntity(atom.content);
       if (factCanonical.isEmpty) continue;
       final factKey = graphNodeKey(GraphNodeType.fact, factCanonical);
-      _upsertNode(GraphNode(
-        key: factKey,
-        type: GraphNodeType.fact,
-        value: atom.content,
-        canonicalValue: factCanonical,
-        metadata: {'atomType': atom.atomType.name, 'importance': atom.importance},
-      ));
+      _upsertNode(
+        GraphNode(
+          key: factKey,
+          type: GraphNodeType.fact,
+          value: atom.content,
+          canonicalValue: factCanonical,
+          metadata: {
+            'atomType': atom.atomType.name,
+            'importance': atom.importance,
+          },
+        ),
+      );
 
       // fact 条目
       final factEntryKey = _sha1('fact|${memory.id}||$factCanonical');
-      _upsertEntry(GraphEntry(
-        entryKey: factEntryKey,
-        sourceMemoryId: memory.id,
-        sessionId: sessionId,
-        personaId: personaId,
-        entryType: 'fact',
-        content: 'Atom: ${atom.content}',
-        confidence: atom.confidence,
-        nodeKeys: [factKey],
-      ));
+      _upsertEntry(
+        GraphEntry(
+          entryKey: factEntryKey,
+          sourceMemoryId: memory.id,
+          sessionId: sessionId,
+          personaId: personaId,
+          entryType: 'fact',
+          content: 'Atom: ${atom.content}',
+          confidence: atom.confidence,
+          nodeKeys: [factKey],
+        ),
+      );
 
       // 实体（排除与参与者重名的）→ topic 节点 + 边
       final factEntry = entries[factEntryKey]!;
       for (final entity in atom.entities.take(8)) {
         final canonical = canonicalizeEntity(entity);
         if (canonical.isEmpty) continue;
-        final isPerson = memory.participants
-            .any((p) => canonicalizeEntity(p) == canonical);
+        final isPerson = memory.participants.any(
+          (p) => canonicalizeEntity(p) == canonical,
+        );
         final entityKey = graphNodeKey(
           isPerson ? GraphNodeType.person : GraphNodeType.topic,
           canonical,
         );
         if (!isPerson) {
-          _upsertNode(GraphNode(
-            key: entityKey,
-            type: GraphNodeType.topic,
-            value: entity,
-            canonicalValue: canonical,
-          ));
+          _upsertNode(
+            GraphNode(
+              key: entityKey,
+              type: GraphNodeType.topic,
+              value: entity,
+              canonicalValue: canonical,
+            ),
+          );
         }
         final relation = isPerson ? 'mentioned_in' : 'describes';
-        _addEdge(GraphEdge(
-          sourceKey: entityKey,
-          targetKey: factKey,
-          relationType: relation,
-          sourceMemoryId: memory.id,
-          confidence: atom.confidence * 0.9,
-        ));
+        _addEdge(
+          GraphEdge(
+            sourceKey: entityKey,
+            targetKey: factKey,
+            relationType: relation,
+            sourceMemoryId: memory.id,
+            confidence: atom.confidence * 0.9,
+          ),
+        );
         _linkEntryToNode(factEntry, entityKey, relation);
       }
     }
@@ -202,14 +216,16 @@ class GraphMemoryStore {
 
   /// 删除某条记忆的图谱痕迹并回收孤儿节点（照抄 delete_memory 语义）
   void deleteMemory(String memoryId) {
-    for (final entryKey in _entryKeysByMemory.remove(memoryId) ?? const <String>{}) {
+    for (final entryKey
+        in _entryKeysByMemory.remove(memoryId) ?? const <String>{}) {
       final entry = entries.remove(entryKey);
       if (entry == null) continue;
       for (final nodeKey in entry.nodeKeys) {
         _entriesByNode[nodeKey]?.remove(entryKey);
       }
     }
-    for (final semanticKey in _edgesByMemory.remove(memoryId) ?? const <String>{}) {
+    for (final semanticKey
+        in _edgesByMemory.remove(memoryId) ?? const <String>{}) {
       edges.remove(semanticKey);
     }
     _rebuildNeighborIndex();
@@ -295,13 +311,15 @@ class GraphMemoryStore {
       if (existing == null) {
         candidates[memoryId] = (score: weightedScore, sources: {source});
       } else if (weightedScore > existing.score) {
-        candidates[memoryId] =
-            (score: weightedScore, sources: {...existing.sources, source});
+        candidates[memoryId] = (
+          score: weightedScore,
+          sources: {...existing.sources, source},
+        );
       } else {
         // 较弱的补充命中叠加 0.35（照抄 merge_hit）
         candidates[memoryId] = (
           score: (existing.score + weightedScore * 0.35).clamp(0.0, 1.0),
-          sources: {...existing.sources, source}
+          sources: {...existing.sources, source},
         );
       }
     }
@@ -309,7 +327,12 @@ class GraphMemoryStore {
     // 1. 条目 BM25 直命中（权重 1.0）
     final entryTokens = <String, List<String>>{};
     for (final entry in entries.values) {
-      if (!_scopeMatches(entry.sessionId, entry.personaId, sessionId, personaId)) {
+      if (!_scopeMatches(
+        entry.sessionId,
+        entry.personaId,
+        sessionId,
+        personaId,
+      )) {
         continue;
       }
       entryTokens[entry.entryKey] = tokenize(entry.content);
@@ -327,7 +350,9 @@ class GraphMemoryStore {
       final ranked = scores.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));
       final maxScore = ranked.isEmpty ? 1.0 : ranked.first.value;
-      for (final e in ranked.take(expansionLimit * 3 < 12 ? 12 : expansionLimit * 3)) {
+      for (final e in ranked.take(
+        expansionLimit * 3 < 12 ? 12 : expansionLimit * 3,
+      )) {
         final entry = entries[e.key]!;
         final normalized = maxScore > 0 ? e.value / maxScore : 0.0;
         mergeHit(entry.sourceMemoryId, normalized.clamp(0.0, 1.0), 'direct');
@@ -354,7 +379,12 @@ class GraphMemoryStore {
     for (final e in expandedEntries.entries) {
       final entry = entries[e.key];
       if (entry == null) continue;
-      if (!_scopeMatches(entry.sessionId, entry.personaId, sessionId, personaId)) {
+      if (!_scopeMatches(
+        entry.sessionId,
+        entry.personaId,
+        sessionId,
+        personaId,
+      )) {
         continue;
       }
       final score = (0.35 + 0.15 * e.value).clamp(0.0, 1.0);
@@ -374,7 +404,12 @@ class GraphMemoryStore {
           for (final entryKey in _entriesByNode[n.key] ?? const <String>{}) {
             final entry = entries[entryKey];
             if (entry == null) continue;
-            if (!_scopeMatches(entry.sessionId, entry.personaId, sessionId, personaId)) {
+            if (!_scopeMatches(
+              entry.sessionId,
+              entry.personaId,
+              sessionId,
+              personaId,
+            )) {
               continue;
             }
             mergeHit(entry.sourceMemoryId, 0.5 * 0.7, 'edge_neighbor');
@@ -382,15 +417,20 @@ class GraphMemoryStore {
         }
       }
       if (expansionHops >= 2) {
-        final secondHop = <String>{
-          for (final n in firstHopNodes)
-            ...?_neighbors[n]?.keys,
-        }..removeAll(matchedNodes.toSet())..removeAll(firstHopNodes);
+        final secondHop =
+            <String>{for (final n in firstHopNodes) ...?_neighbors[n]?.keys}
+              ..removeAll(matchedNodes.toSet())
+              ..removeAll(firstHopNodes);
         for (final nodeKey in secondHop.take(expansionLimit)) {
           for (final entryKey in _entriesByNode[nodeKey] ?? const <String>{}) {
             final entry = entries[entryKey];
             if (entry == null) continue;
-            if (!_scopeMatches(entry.sessionId, entry.personaId, sessionId, personaId)) {
+            if (!_scopeMatches(
+              entry.sessionId,
+              entry.personaId,
+              sessionId,
+              personaId,
+            )) {
               continue;
             }
             mergeHit(entry.sourceMemoryId, 0.5 * secondHopWeight, 'second_hop');
@@ -410,7 +450,8 @@ class GraphMemoryStore {
       final importance = importanceOf(memoryId).clamp(0.0, 1.0);
       final created = createdAtOf(memoryId);
       final accessed = lastAccessOf(memoryId) ?? created;
-      final refTime = (accessed != null && created != null && accessed.isAfter(created))
+      final refTime =
+          (accessed != null && created != null && accessed.isAfter(created))
           ? accessed
           : (created ?? now);
       final daysOld = now.difference(refTime).inMilliseconds / 86400000.0;
@@ -425,13 +466,18 @@ class GraphMemoryStore {
         }
       }
       final finalScore =
-          (alpha * kwScore + beta * importance + gamma * recency + delta * confidence)
+          (alpha * kwScore +
+                  beta * importance +
+                  gamma * recency +
+                  delta * confidence)
               .clamp(0.0, 1.0);
-      hits.add(GraphSearchHit(
-        sourceMemoryId: memoryId,
-        score: finalScore,
-        matchSource: c.value.sources.first,
-      ));
+      hits.add(
+        GraphSearchHit(
+          sourceMemoryId: memoryId,
+          score: finalScore,
+          matchSource: c.value.sources.first,
+        ),
+      );
     }
     hits.sort((a, b) => b.score.compareTo(a.score));
     return hits.take(limit).toList();
@@ -453,39 +499,45 @@ class GraphMemoryStore {
   // ---- 序列化（持久化到 SharedPreferences） ----
 
   Map<String, dynamic> toJson() => {
-        'nodes': nodes.values
-            .map((n) => {
-                  'key': n.key,
-                  'type': n.type.name,
-                  'value': n.value,
-                  'canonicalValue': n.canonicalValue,
-                  'metadata': n.metadata,
-                })
-            .toList(),
-        'edges': edges.values
-            .map((e) => {
-                  'sourceKey': e.sourceKey,
-                  'targetKey': e.targetKey,
-                  'relationType': e.relationType,
-                  'sourceMemoryId': e.sourceMemoryId,
-                  'confidence': e.confidence,
-                  'weight': e.weight,
-                })
-            .toList(),
-        'entries': entries.values
-            .map((e) => {
-                  'entryKey': e.entryKey,
-                  'sourceMemoryId': e.sourceMemoryId,
-                  'sessionId': e.sessionId,
-                  'personaId': e.personaId,
-                  'entryType': e.entryType,
-                  'content': e.content,
-                  'confidence': e.confidence,
-                  'nodeKeys': e.nodeKeys,
-                  'relationType': e.relationType,
-                })
-            .toList(),
-      };
+    'nodes': nodes.values
+        .map(
+          (n) => {
+            'key': n.key,
+            'type': n.type.name,
+            'value': n.value,
+            'canonicalValue': n.canonicalValue,
+            'metadata': n.metadata,
+          },
+        )
+        .toList(),
+    'edges': edges.values
+        .map(
+          (e) => {
+            'sourceKey': e.sourceKey,
+            'targetKey': e.targetKey,
+            'relationType': e.relationType,
+            'sourceMemoryId': e.sourceMemoryId,
+            'confidence': e.confidence,
+            'weight': e.weight,
+          },
+        )
+        .toList(),
+    'entries': entries.values
+        .map(
+          (e) => {
+            'entryKey': e.entryKey,
+            'sourceMemoryId': e.sourceMemoryId,
+            'sessionId': e.sessionId,
+            'personaId': e.personaId,
+            'entryType': e.entryType,
+            'content': e.content,
+            'confidence': e.confidence,
+            'nodeKeys': e.nodeKeys,
+            'relationType': e.relationType,
+          },
+        )
+        .toList(),
+  };
 
   static GraphMemoryStore fromJson(Map<String, dynamic> json) {
     final store = GraphMemoryStore();
@@ -493,8 +545,10 @@ class GraphMemoryStore {
       final map = n as Map<String, dynamic>;
       final node = GraphNode(
         key: map['key'],
-        type: GraphNodeType.values
-            .firstWhere((t) => t.name == map['type'], orElse: () => GraphNodeType.topic),
+        type: GraphNodeType.values.firstWhere(
+          (t) => t.name == map['type'],
+          orElse: () => GraphNodeType.topic,
+        ),
         value: map['value'] ?? '',
         canonicalValue: map['canonicalValue'] ?? '',
         metadata: (map['metadata'] as Map?)?.cast<String, dynamic>() ?? {},
@@ -527,8 +581,9 @@ class GraphMemoryStore {
         relationType: map['relationType'],
       );
       store.entries[entry.entryKey] = entry;
-      (store._entryKeysByMemory[entry.sourceMemoryId] ??= {})
-          .add(entry.entryKey);
+      (store._entryKeysByMemory[entry.sourceMemoryId] ??= {}).add(
+        entry.entryKey,
+      );
       for (final nodeKey in entry.nodeKeys) {
         (store._entriesByNode[nodeKey] ??= {}).add(entry.entryKey);
       }

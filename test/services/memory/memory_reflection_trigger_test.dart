@@ -18,17 +18,16 @@ void main() {
   }
 
   ChatMessage msg(String role, String text) => ChatMessage(
-        id: 'msg-${DateTime.now().microsecondsSinceEpoch}-$role-$text',
-        role: role,
-        content: text,
-        timestamp: DateTime.now(),
-      );
+    id: 'msg-${DateTime.now().microsecondsSinceEpoch}-$role-$text',
+    role: role,
+    content: text,
+    timestamp: DateTime.now(),
+  );
 
   group('记忆提取滑窗触发（AppState 级）', () {
     test('未达阈值不触发', () async {
       final state = await buildState();
-      state.memorySettings =
-          state.memorySettings.copyWith(summaryThreshold: 5);
+      state.memorySettings = state.memorySettings.copyWith(summaryThreshold: 5);
       final session = await state.newSession();
       for (var i = 0; i < 3; i++) {
         session.messages.addAll([
@@ -38,16 +37,12 @@ void main() {
       }
       // 无可用 API 时直接跳过；这里主要验证不炸、无 pending
       await state.debugCheckAndSummarize(session);
-      expect(
-        state.memoryReflectionState[session.id]?['pending'],
-        isNull,
-      );
+      expect(state.memoryReflectionState[session.id]?['pending'], isNull);
     });
 
     test('达到阈值且无 API → 不触发（需要对话模型）', () async {
       final state = await buildState();
-      state.memorySettings =
-          state.memorySettings.copyWith(summaryThreshold: 2);
+      state.memorySettings = state.memorySettings.copyWith(summaryThreshold: 2);
       final session = await state.newSession();
       for (var i = 0; i < 5; i++) {
         session.messages.addAll([
@@ -61,42 +56,46 @@ void main() {
       expect(rs == null || rs['pending'] == null, isTrue);
     });
 
-    test('有 API 但请求失败 → 记录 pending 重试区间', () async {
-      final state = await buildState();
-      state.memorySettings =
-          state.memorySettings.copyWith(summaryThreshold: 2);
-      // 配置一个指向不可达端口的 API（连接立即失败）
-      state.apiConfigs.add(
-        ApiConfig(
-          id: 'fake',
-          name: 'fake',
-          baseUrl: 'http://127.0.0.1:1',
-          apiKey: 'k',
-          model: 'm',
-        ),
-      );
-      state.activeApiId = 'fake';
-      final session = await state.newSession();
-      for (var i = 0; i < 5; i++) {
-        session.messages.addAll([
-          msg('user', '用户消息$i，包含一些内容'),
-          msg('assistant', '助手回复$i，包含一些内容'),
-        ]);
-      }
-      await state.debugCheckAndSummarize(session);
+    test(
+      '有 API 但请求失败 → 记录 pending 重试区间',
+      () async {
+        final state = await buildState();
+        state.memorySettings = state.memorySettings.copyWith(
+          summaryThreshold: 2,
+        );
+        // 配置一个指向不可达端口的 API（连接立即失败）
+        state.apiConfigs.add(
+          ApiConfig(
+            id: 'fake',
+            name: 'fake',
+            baseUrl: 'http://127.0.0.1:1',
+            apiKey: 'k',
+            model: 'm',
+          ),
+        );
+        state.activeApiId = 'fake';
+        final session = await state.newSession();
+        for (var i = 0; i < 5; i++) {
+          session.messages.addAll([
+            msg('user', '用户消息$i，包含一些内容'),
+            msg('assistant', '助手回复$i，包含一些内容'),
+          ]);
+        }
+        await state.debugCheckAndSummarize(session);
 
-      final rs = state.memoryReflectionState[session.id]!;
-      final pending = rs['pending'] as Map<String, dynamic>?;
-      expect(pending, isNotNull);
-      expect(pending!['retryCount'], 1);
-      expect(pending['startIndex'], 0);
-      expect(pending['endIndex'], 10);
-    }, timeout: const Timeout(Duration(seconds: 60)));
+        final rs = state.memoryReflectionState[session.id]!;
+        final pending = rs['pending'] as Map<String, dynamic>?;
+        expect(pending, isNotNull);
+        expect(pending!['retryCount'], 1);
+        expect(pending['startIndex'], 0);
+        expect(pending['endIndex'], 10);
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
 
     test('pending 超过 3 次后放弃并推进游标', () async {
       final state = await buildState();
-      state.memorySettings =
-          state.memorySettings.copyWith(summaryThreshold: 2);
+      state.memorySettings = state.memorySettings.copyWith(summaryThreshold: 2);
       state.apiConfigs.add(
         ApiConfig(
           id: 'fake',
@@ -117,11 +116,7 @@ void main() {
       // 预置已达上限的 pending
       state.memoryReflectionState[session.id] = {
         'lastSummarizedIndex': 0,
-        'pending': {
-          'startIndex': 0,
-          'endIndex': 10,
-          'retryCount': 3,
-        },
+        'pending': {'startIndex': 0, 'endIndex': 10, 'retryCount': 3},
       };
       await state.debugCheckAndSummarize(session);
       final rs = state.memoryReflectionState[session.id]!;
@@ -131,12 +126,9 @@ void main() {
 
     test('lastSummarizedIndex 超过消息总数时钳位', () async {
       final state = await buildState();
-      state.memorySettings =
-          state.memorySettings.copyWith(summaryThreshold: 2);
+      state.memorySettings = state.memorySettings.copyWith(summaryThreshold: 2);
       final session = await state.newSession();
-      session.messages.addAll([
-        msg('user', '只有一条'),
-      ]);
+      session.messages.addAll([msg('user', '只有一条')]);
       state.memoryReflectionState[session.id] = {
         'lastSummarizedIndex': 100, // 异常值
       };
@@ -173,10 +165,7 @@ void main() {
         's1',
       );
       expect(results, isNotEmpty);
-      expect(
-        results.first.content.contains('火锅'),
-        isTrue,
-      );
+      expect(results.first.content.contains('火锅'), isTrue);
     });
 
     test('clearSessions 同步清空反思游标', () async {
@@ -284,20 +273,14 @@ void main() {
       expect(state.memories.where((m) => m.id == 'dup').length, 1);
       // 原子与图谱已补建
       expect(state.memoryAtoms.isNotEmpty, isTrue);
-      expect(
-        state.memoryAtoms.any((a) => a.parentMemoryId == 'new-1'),
-        isTrue,
-      );
+      expect(state.memoryAtoms.any((a) => a.parentMemoryId == 'new-1'), isTrue);
       expect(state.graphStore.nodeCount, greaterThan(0));
     });
   });
 }
 
 Future<dynamic> _addPersona(AppState state, String name) async {
-  final persona = Persona(
-    id: 'persona-$name',
-    name: name,
-  );
+  final persona = Persona(id: 'persona-$name', name: name);
   await state.addOrUpdatePersona(persona);
   return persona;
 }

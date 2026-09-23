@@ -73,7 +73,8 @@ class Bm25Index {
         if (tf == null || tf == 0) continue;
         final dl = _docLengths[docId] ?? 0;
         final denom = tf + k1 * (1 - b + b * dl / avgLen);
-        rawScores[docId] = (rawScores[docId] ?? 0) + idf * tf * (k1 + 1) / denom;
+        rawScores[docId] =
+            (rawScores[docId] ?? 0) + idf * tf * (k1 + 1) / denom;
       }
     }
     if (rawScores.isEmpty) return const [];
@@ -94,9 +95,7 @@ class Bm25Index {
     } else {
       final range = max - min;
       for (final entry in rawScores.entries) {
-        hits.add(
-          Bm25Hit(docId: entry.key, score: (max - entry.value) / range),
-        );
+        hits.add(Bm25Hit(docId: entry.key, score: (max - entry.value) / range));
       }
     }
     hits.sort((a, b2) => b2.score.compareTo(a.score));

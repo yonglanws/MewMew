@@ -9,39 +9,39 @@ import 'logger_service.dart';
 class BuiltinTools {
   /// 内置工具定义
   static List<ToolConfig> get definitions => [
-        ToolConfig(
-          id: 'builtin_current_time',
-          name: 'get_current_time',
-          description: '获取当前日期和时间',
-          type: ToolType.builtin,
-          paramsSchemaJson: '{"type":"object","properties":{}}',
-        ),
-        ToolConfig(
-          id: 'builtin_calculator',
-          name: 'calculate',
-          description: '计算数学表达式。支持加减乘除和括号，用于需要精确数值计算时',
-          type: ToolType.builtin,
-          paramsSchemaJson:
-              '{"type":"object","properties":{"expression":{"type":"string","description":"数学表达式，如 (1+2)*3"}},"required":["expression"]}',
-        ),
-        ToolConfig(
-          id: 'builtin_save_memory',
-          name: 'save_memory',
-          description: '保存用户的关键信息到长期记忆。用于记住用户的偏好、身份、重要事实等，便于后续对话参考',
-          type: ToolType.builtin,
-          paramsSchemaJson:
-              '{"type":"object","properties":{"content":{"type":"string","description":"要记住的关键信息，简洁明确"}},"required":["content"]}',
-        ),
-        ToolConfig(
-          id: 'builtin_recall_memory',
-          name: 'recall_long_term_memory',
-          description:
-              '按需检索长期记忆。当需要回忆用户的过往偏好、历史约定、人物关系或之前聊过的话题时调用。query 使用简短的主题关键词，而非整句话',
-          type: ToolType.builtin,
-          paramsSchemaJson:
-              '{"type":"object","properties":{"query":{"type":"string","description":"简短的召回关键词，如 用户喜欢的食物、上周的约定"},"k":{"type":"integer","description":"返回条数，默认 5"}},"required":["query"]}',
-        ),
-      ];
+    ToolConfig(
+      id: 'builtin_current_time',
+      name: 'get_current_time',
+      description: '获取当前日期和时间',
+      type: ToolType.builtin,
+      paramsSchemaJson: '{"type":"object","properties":{}}',
+    ),
+    ToolConfig(
+      id: 'builtin_calculator',
+      name: 'calculate',
+      description: '计算数学表达式。支持加减乘除和括号，用于需要精确数值计算时',
+      type: ToolType.builtin,
+      paramsSchemaJson:
+          '{"type":"object","properties":{"expression":{"type":"string","description":"数学表达式，如 (1+2)*3"}},"required":["expression"]}',
+    ),
+    ToolConfig(
+      id: 'builtin_save_memory',
+      name: 'save_memory',
+      description: '保存用户的关键信息到长期记忆。用于记住用户的偏好、身份、重要事实等，便于后续对话参考',
+      type: ToolType.builtin,
+      paramsSchemaJson:
+          '{"type":"object","properties":{"content":{"type":"string","description":"要记住的关键信息，简洁明确"}},"required":["content"]}',
+    ),
+    ToolConfig(
+      id: 'builtin_recall_memory',
+      name: 'recall_long_term_memory',
+      description:
+          '按需检索长期记忆。当需要回忆用户的过往偏好、历史约定、人物关系或之前聊过的话题时调用。query 使用简短的主题关键词，而非整句话',
+      type: ToolType.builtin,
+      paramsSchemaJson:
+          '{"type":"object","properties":{"query":{"type":"string","description":"简短的召回关键词，如 用户喜欢的食物、上周的约定"},"k":{"type":"integer","description":"返回条数，默认 5"}},"required":["query"]}',
+    ),
+  ];
 
   static Future<String> execute(
     String name,
@@ -118,8 +118,7 @@ class BuiltinTools {
         return -parseFactor();
       }
       final start = pos;
-      while (pos < tokens.length &&
-          (RegExp(r'[0-9.]').hasMatch(tokens[pos]))) {
+      while (pos < tokens.length && (RegExp(r'[0-9.]').hasMatch(tokens[pos]))) {
         pos++;
       }
       return double.parse(tokens.substring(start, pos));
@@ -132,24 +131,29 @@ class BuiltinTools {
 /// 自定义 HTTP 工具执行器
 class HttpToolExecutor {
   static Future<String> execute(
-      ToolConfig tool, Map<String, dynamic> args) async {
-    log.d('tool', 'HTTP 工具调用：${tool.name} ${tool.method} ${tool.url}');
+    ToolConfig tool,
+    Map<String, dynamic> args,
+  ) async {
+    Log.d('tool', 'HTTP 工具调用：${tool.name} ${tool.method} ${tool.url}');
     try {
       Map<String, String> headers = {};
       try {
-        headers = (jsonDecode(tool.headersJson) as Map<String, dynamic>)
-            .map((k, v) => MapEntry(k, v.toString()));
+        headers = (jsonDecode(tool.headersJson) as Map<String, dynamic>).map(
+          (k, v) => MapEntry(k, v.toString()),
+        );
       } catch (_) {}
 
       http.Response resp;
       if (tool.method.toUpperCase() == 'GET') {
-        final uri = Uri.parse(tool.url).replace(queryParameters: {
-          ...Uri.parse(tool.url).queryParameters,
-          ...args.map((k, v) => MapEntry(k, v.toString())),
-        });
-        resp = await http.get(uri, headers: headers).timeout(
-              const Duration(seconds: 30),
-            );
+        final uri = Uri.parse(tool.url).replace(
+          queryParameters: {
+            ...Uri.parse(tool.url).queryParameters,
+            ...args.map((k, v) => MapEntry(k, v.toString())),
+          },
+        );
+        resp = await http
+            .get(uri, headers: headers)
+            .timeout(const Duration(seconds: 30));
       } else {
         headers.putIfAbsent('Content-Type', () => 'application/json');
         resp = await http
@@ -157,11 +161,14 @@ class HttpToolExecutor {
             .timeout(const Duration(seconds: 30));
       }
       final body = utf8.decode(resp.bodyBytes);
-      log.i('tool', 'HTTP 工具响应：${tool.name} ${resp.statusCode} '
-          '长度=${body.length}');
+      Log.i(
+        'tool',
+        'HTTP 工具响应：${tool.name} ${resp.statusCode} '
+            '长度=${body.length}',
+      );
       return body.length > 4000 ? body.substring(0, 4000) : body;
     } catch (e) {
-      log.e('tool', 'HTTP 工具调用失败：${tool.name}', error: e);
+      Log.e('tool', 'HTTP 工具调用失败：${tool.name}', error: e);
       return '工具调用失败: $e';
     }
   }

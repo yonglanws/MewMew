@@ -8,6 +8,7 @@ import '../models/models.dart';
 import '../state/app_state.dart';
 import '../utils/fast_route.dart';
 import '../widgets/app_drawer.dart';
+import '../widgets/mini_group_avatar.dart';
 import '../widgets/persona_avatar.dart';
 import 'chat_page.dart';
 import 'persona_page.dart';
@@ -405,8 +406,9 @@ TextSpan _highlightSearchText(String text, BuildContext context) {
   final spans = <TextSpan>[];
   var start = 0;
   for (final match in pattern.allMatches(text)) {
-    if (match.start > start)
+    if (match.start > start) {
       spans.add(TextSpan(text: text.substring(start, match.start)));
+    }
     spans.add(
       TextSpan(
         text: text.substring(match.start, match.end),
@@ -510,11 +512,9 @@ class _UnifiedTile extends StatelessWidget {
       subtitle = count > 0 ? '$count 位成员' : '暂无成员';
     } else if (item.persona != null) {
       final p = item.persona!;
-      subtitle = p.greeting.isNotEmpty
-          ? p.greeting
-          : (p.useRawPrompt
-                ? '完整提示词模式'
-                : (p.personality.isEmpty ? '点击开始对话' : p.personality));
+      subtitle = p.useRawPrompt
+          ? '完整提示词模式'
+          : (p.personality.isEmpty ? '点击开始对话' : p.personality);
     } else {
       subtitle = '点击开始对话';
     }
@@ -596,38 +596,16 @@ class _GroupAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final scheme = Theme.of(context).colorScheme;
-    final radius = size / 2;
 
-    if (group.avatarPath.isNotEmpty) {
-      return CircleAvatar(
-        radius: radius,
-        backgroundColor: scheme.primaryContainer,
-        foregroundImage: FileImage(File(group.avatarPath)),
-        onForegroundImageError: (_, __) {},
-        child: Icon(
-          Icons.group_rounded,
-          size: radius,
-          color: scheme.onPrimaryContainer,
-        ),
-      );
-    }
-    final members = group.personaIds
-        .map((id) => state.personaById(id))
-        .whereType<Persona>()
-        .take(3)
-        .toList();
-    if (members.isEmpty) {
-      return _UserGroupAvatar(
-        profile: state.userProfile,
-        radius: radius,
-        borderColor: scheme.surface,
-      );
-    }
-    return _GroupMemberAvatarGrid(
+    // 与聊天记录管理页一致的圆角网格群头像：
+    // 自定义群图 / 2x2 均分网格 / 单成员居中 / 空群居中图标
+    return MiniGroupAvatar(
       size: size,
-      members: members,
-      profile: state.userProfile,
+      avatarPath: group.avatarPath,
+      members: group.personaIds
+          .map((id) => state.personaById(id))
+          .whereType<Persona>()
+          .toList(),
     );
   }
 }
@@ -666,84 +644,6 @@ class _UserGroupAvatar extends StatelessWidget {
                 ),
               ),
             ),
-    );
-  }
-}
-
-class _PersonaGroupAvatar extends StatelessWidget {
-  final Persona persona;
-  final double radius;
-  final Color borderColor;
-
-  const _PersonaGroupAvatar({
-    required this.persona,
-    required this.radius,
-    required this.borderColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: borderColor, width: 1.5),
-      ),
-      child: PersonaAvatar(persona: persona, radius: radius),
-    );
-  }
-}
-
-class _GroupMemberAvatarGrid extends StatelessWidget {
-  final double size;
-  final List<Persona> members;
-  final UserProfile profile;
-
-  const _GroupMemberAvatarGrid({
-    required this.size,
-    required this.members,
-    required this.profile,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final total = (members.length + 1).clamp(1, 4).toInt();
-    final radius = size * (total == 3 ? 0.19 : 0.18);
-    final centers = total == 3
-        ? [
-            Offset(size * .5, size * .22),
-            Offset(size * .25, size * .72),
-            Offset(size * .75, size * .72),
-          ]
-        : [
-            Offset(size * .25, size * .25),
-            Offset(size * .75, size * .25),
-            Offset(size * .25, size * .75),
-            Offset(size * .75, size * .75),
-          ];
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        children: [
-          for (var i = 0; i < total; i++)
-            Positioned(
-              left: centers[i].dx - radius,
-              top: centers[i].dy - radius,
-              child: i == 0
-                  ? _UserGroupAvatar(
-                      profile: profile,
-                      radius: radius,
-                      borderColor: scheme.surface,
-                    )
-                  : _PersonaGroupAvatar(
-                      persona: members[i - 1],
-                      radius: radius,
-                      borderColor: scheme.surface,
-                    ),
-            ),
-        ],
-      ),
     );
   }
 }

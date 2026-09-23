@@ -103,19 +103,19 @@ MemoryAtom? classifyFact({
 
 /// 各类型的基准 TTL（天）与衰减曲线（照抄原版 MEMORY_TYPE_TTL_CONFIG）
 double baseTtlDays(AtomType type) => switch (type) {
-      AtomType.episodic => 7,
-      AtomType.planned => 2,
-      AtomType.factual => 180,
-      AtomType.relational => 90,
-      AtomType.preference => 60,
-      AtomType.unknown => 30,
-    };
+  AtomType.episodic => 7,
+  AtomType.planned => 2,
+  AtomType.factual => 180,
+  AtomType.relational => 90,
+  AtomType.preference => 60,
+  AtomType.unknown => 30,
+};
 
 AtomDecayType baseDecayType(AtomType type) => switch (type) {
-      AtomType.planned => AtomDecayType.step,
-      AtomType.relational => AtomDecayType.linear,
-      _ => AtomDecayType.exponential,
-    };
+  AtomType.planned => AtomDecayType.step,
+  AtomType.relational => AtomDecayType.linear,
+  _ => AtomDecayType.exponential,
+};
 
 /// TTL 计算（照抄原版 compute_ttl）：
 /// planned 且有未来事件时间时基准顺延；importance 抬升、访问强化延长。
@@ -153,17 +153,18 @@ DateTime? parseChineseRelativeTime(String text, DateTime now) {
   if (text.contains('前天')) return date.subtract(const Duration(days: 2));
 
   // 周 X（上周/本周/下周/下下周）
-  final weekMatch =
-      RegExp(r'(上周|本周|下周|下下周)?[周禮][一二三四五六日天]').firstMatch(text);
+  final weekMatch = RegExp(r'(上周|本周|下周|下下周)?[周禮][一二三四五六日天]').firstMatch(text);
   if (weekMatch != null) {
-    const prefixOffset = {
-      '上周': -7,
-      '本周': 0,
-      '下周': 7,
-      '下下周': 14,
-    };
+    const prefixOffset = {'上周': -7, '本周': 0, '下周': 7, '下下周': 14};
     const weekdayMap = {
-      '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7,
+      '一': 1,
+      '二': 2,
+      '三': 3,
+      '四': 4,
+      '五': 5,
+      '六': 6,
+      '日': 7,
+      '天': 7,
     };
     final prefix = weekMatch.group(1) ?? '本周';
     final weekdayChar = text.substring(weekMatch.end - 1, weekMatch.end);

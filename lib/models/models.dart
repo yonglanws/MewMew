@@ -5,18 +5,49 @@ import 'dart:math' show exp;
 class UserProfile {
   String name;
   String avatarPath;
+  String description; // 我的设定：注入给 AI 的自我介绍/人设描述（空 = 不注入）
 
-  UserProfile({this.name = '我', this.avatarPath = ''});
+  UserProfile({
+    this.name = '我',
+    this.avatarPath = '',
+    this.description = '',
+  });
 
-  Map<String, dynamic> toJson() => {'name': name, 'avatarPath': avatarPath};
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'avatarPath': avatarPath,
+    'description': description,
+  };
 
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
     name: json['name'] ?? '我',
     avatarPath: json['avatarPath'] ?? '',
+    description: json['description'] ?? '',
   );
 }
 
 /// AI 服务接口配置（OpenAI 兼容格式）—— 仅对话模型
+/// 供应商下的一个模型档位（如 zhipu 下的 glm-5.3 / glm-5.2）
+class ApiModelEntry {
+  final String id;
+  String model; // 模型名，如 glm-5.3
+  String label; // 备注（可空串）
+
+  ApiModelEntry({required this.id, required this.model, this.label = ''});
+
+  Map<String, dynamic> toJson() => {'id': id, 'model': model, 'label': label};
+
+  factory ApiModelEntry.fromJson(Map<String, dynamic> json) => ApiModelEntry(
+    id: json['id'],
+    model: json['model'],
+    label: json['label'] ?? '',
+  );
+}
+
+/// API 供应商配置：Base URL + API Key 配置一次，
+/// 下挂多个模型档位，无需为每个模型重复填写供应商信息。
+/// [model] 字段保留为"该供应商当前选中的模型"——即被选中用于对话的
+/// 模型名，与 [models] 中的某一项保持同步（兼容旧数据与既有调用方）。
 class ApiConfig {
   final String id;
   String name;
@@ -24,6 +55,7 @@ class ApiConfig {
   String apiKey;
   String model;
   double temperature;
+  List<ApiModelEntry> models; // 模型档位列表
 
   ApiConfig({
     required this.id,
@@ -32,7 +64,20 @@ class ApiConfig {
     required this.apiKey,
     required this.model,
     this.temperature = 0.7,
-  });
+    List<ApiModelEntry>? models,
+  }) : models =
+           models ??
+           (model.trim().isEmpty
+               ? []
+               : [ApiModelEntry(id: 'm-$id', model: model)]);
+
+  /// 当前选中模型对应的档位（找不到时返回 null）
+  ApiModelEntry? get activeModelEntry {
+    for (final m in models) {
+      if (m.model == model) return m;
+    }
+    return null;
+  }
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -41,16 +86,32 @@ class ApiConfig {
     'apiKey': apiKey,
     'model': model,
     'temperature': temperature,
+    'models': models.map((m) => m.toJson()).toList(),
   };
 
-  factory ApiConfig.fromJson(Map<String, dynamic> json) => ApiConfig(
-    id: json['id'],
-    name: json['name'],
-    baseUrl: json['baseUrl'],
-    apiKey: json['apiKey'],
-    model: json['model'],
-    temperature: (json['temperature'] ?? 0.7).toDouble(),
-  );
+  factory ApiConfig.fromJson(Map<String, dynamic> json) {
+    final models = (json['models'] as List?)
+        ?.whereType<Map>()
+        .map((m) => ApiModelEntry.fromJson(Map<String, dynamic>.from(m)))
+        .toList();
+    final legacyModel = (json['model'] ?? '').toString();
+    final id = json['id'];
+    return ApiConfig(
+      id: id,
+      name: json['name'],
+      baseUrl: json['baseUrl'],
+      apiKey: json['apiKey'],
+      model: legacyModel,
+      temperature: (json['temperature'] ?? 0.7).toDouble(),
+      // 旧数据迁移：只有单个 model 字段时包装为一个模型档位
+      models:
+          (models != null && models.isNotEmpty)
+          ? models
+          : (legacyModel.trim().isEmpty
+                ? []
+                : [ApiModelEntry(id: 'm-$id', model: legacyModel)]),
+    );
+  }
 }
 
 /// 嵌入模型 API 配置（独立于对话 API，可指向不同服务商）
@@ -77,16 +138,23 @@ class EmbeddingApiConfig {
       );
 }
 
-/// 角色人格设定
+/// 角色卡（拟人化人格设定）
+///
+/// 结构化字段（名称/外貌/性格/背景故事/对话风格）由
+/// CharacterPrompt 按高度拟人的默认模板拼接成系统提示词；
+/// [promptTemplate] 非空时使用角色专属模板（支持 {name} 等占位符），
+/// 每个角色都可以不一样；也可切换为用户自行提供的完整提示词。不需要开场白。
 class Persona {
   final String id;
   String name;
   String emoji;
   String avatarPath; // 图片头像路径（本地文件），为空时回退到 emoji
-  String personality; // 性格特征
-  String languageStyle; // 语言风格
+  String appearance; // 外貌特征
+  String personality; // 性格特质
+  String languageStyle; // 对话风格
   String backstory; // 背景故事
-  String greeting; // 开场白
+  String promptTemplate; // 角色专属提示词模板（空 = 使用应用默认拟人模板）
+  String stylePrompt; // 角色专属生成风格（空 = 跟随全局生成风格配置）
   bool useRawPrompt; // true = 完整提示词模式
   String rawPrompt; // 完整提示词内容
 
@@ -95,36 +163,34 @@ class Persona {
     required this.name,
     this.emoji = '🤖',
     this.avatarPath = '',
+    this.appearance = '',
     this.personality = '',
     this.languageStyle = '',
     this.backstory = '',
-    this.greeting = '',
+    this.promptTemplate = '',
+    this.stylePrompt = '',
     this.useRawPrompt = false,
     this.rawPrompt = '',
   });
 
-  /// 构建系统提示词
-  String buildSystemPrompt() {
-    if (useRawPrompt && rawPrompt.trim().isNotEmpty) {
-      return rawPrompt;
-    }
-    final buf = StringBuffer();
-    buf.writeln('你正在扮演角色「$name」，请始终保持角色设定，不要跳出角色。');
-    if (personality.isNotEmpty) buf.writeln('【性格特征】$personality');
-    if (languageStyle.isNotEmpty) buf.writeln('【语言风格】$languageStyle');
-    if (backstory.isNotEmpty) buf.writeln('【背景故事】$backstory');
-    return buf.toString();
-  }
+  /// 结构化字段是否全部为空（仅剩名称）
+  bool get hasNoStructuredFields =>
+      appearance.trim().isEmpty &&
+      personality.trim().isEmpty &&
+      languageStyle.trim().isEmpty &&
+      backstory.trim().isEmpty;
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
     'emoji': emoji,
     'avatarPath': avatarPath,
+    'appearance': appearance,
     'personality': personality,
     'languageStyle': languageStyle,
     'backstory': backstory,
-    'greeting': greeting,
+    'promptTemplate': promptTemplate,
+    'stylePrompt': stylePrompt,
     'useRawPrompt': useRawPrompt,
     'rawPrompt': rawPrompt,
   };
@@ -134,13 +200,277 @@ class Persona {
     name: json['name'],
     emoji: json['emoji'] ?? '🤖',
     avatarPath: json['avatarPath'] ?? '',
+    appearance: json['appearance'] ?? '',
     personality: json['personality'] ?? '',
     languageStyle: json['languageStyle'] ?? '',
     backstory: json['backstory'] ?? '',
-    greeting: json['greeting'] ?? '',
+    promptTemplate: json['promptTemplate'] ?? '',
+    stylePrompt: json['stylePrompt'] ?? '',
     useRawPrompt: json['useRawPrompt'] ?? false,
     rawPrompt: json['rawPrompt'] ?? '',
   );
+}
+
+/// 消息引用（类似"回复"）：用户引用某条消息后发送，
+/// 引用以快照形式随消息持久化，并在构建 API 上下文时注入给 AI。
+class MessageQuote {
+  final String messageId; // 被引用消息的 id（溯源用）
+  final String authorName; // 被引用者的显示名
+  final String text; // 被引用内容快照（创建时截断）
+
+  const MessageQuote({
+    required this.messageId,
+    required this.authorName,
+    required this.text,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'messageId': messageId,
+    'authorName': authorName,
+    'text': text,
+  };
+
+  factory MessageQuote.fromJson(Map<String, dynamic> json) => MessageQuote(
+    messageId: json['messageId'] ?? '',
+    authorName: json['authorName'] ?? '',
+    text: json['text'] ?? '',
+  );
+
+  /// 构建注入 API 上下文的引用行
+  String toContextLine() => '【引用 $authorName 的消息：「$text」】';
+}
+
+/// 提示词注入设置（设置-提示词-提示词注入）
+///
+/// 参考酒馆（SillyTavern）的预设/深度注入机制。没有开关，全部由用户自定义内容驱动：
+/// - [contextPrompt] 实时状态模板（时间/场景/聊天对象），空 = 内置默认
+/// - [privatePrompt] / [groupPrompt] 私聊/群聊风格注入文案，空 = 内置默认
+/// - 模式注入决定注入位置：系统提示词末尾，或聊天记录深处 @Depth
+class PromptInjectionSettings {
+  String contextPrompt; // 支持占位符 {date} {weekday} {time} {period} {scene} {partner} {partnerDesc} {groupName} {members}
+  String privatePrompt;
+  String groupPrompt;
+  String mode; // system / depth（模式注入）
+  int depth; // depth 模式：插入到聊天记录末尾前第 N 条（0 = 最末尾）
+  String role; // depth 模式的消息角色：system / user / assistant
+
+  PromptInjectionSettings({
+    this.contextPrompt = '',
+    this.privatePrompt = '',
+    this.groupPrompt = '',
+    this.mode = 'system',
+    this.depth = 0,
+    this.role = 'system',
+  });
+
+  PromptInjectionSettings copyWith({
+    String? contextPrompt,
+    String? privatePrompt,
+    String? groupPrompt,
+    String? mode,
+    int? depth,
+    String? role,
+  }) => PromptInjectionSettings(
+    contextPrompt: contextPrompt ?? this.contextPrompt,
+    privatePrompt: privatePrompt ?? this.privatePrompt,
+    groupPrompt: groupPrompt ?? this.groupPrompt,
+    mode: mode ?? this.mode,
+    depth: depth ?? this.depth,
+    role: role ?? this.role,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'contextPrompt': contextPrompt,
+    'privatePrompt': privatePrompt,
+    'groupPrompt': groupPrompt,
+    'mode': mode,
+    'depth': depth,
+    'role': role,
+  };
+
+  factory PromptInjectionSettings.fromJson(Map<String, dynamic> json) =>
+      PromptInjectionSettings(
+        contextPrompt: json['contextPrompt'] ?? '',
+        privatePrompt: json['privatePrompt'] ?? '',
+        groupPrompt: json['groupPrompt'] ?? '',
+        mode: json['mode'] ?? 'system',
+        depth: (json['depth'] as num?)?.toInt() ?? 0,
+        role: json['role'] ?? 'system',
+      );
+}
+
+/// 世界书条目（参考酒馆 World Info / Lorebook）
+class WorldBookEntry {
+  final String id;
+  String title; // 条目名（仅用于管理展示）
+  List<String> keywords; // 主关键词（任一出现在最近聊天中即激活）
+  List<String> secondaryKeywords; // 次级关键词（非空时需与主关键词同时命中，AND 逻辑）
+  String content; // 激活后注入的设定内容
+  bool enabled;
+  bool constant; // 常驻条目：无视关键词始终注入
+  int order; // 插入顺序，小的排前面
+
+  WorldBookEntry({
+    required this.id,
+    this.title = '',
+    List<String>? keywords,
+    List<String>? secondaryKeywords,
+    this.content = '',
+    this.enabled = true,
+    this.constant = false,
+    this.order = 100,
+  }) : keywords = keywords ?? const [],
+       secondaryKeywords = secondaryKeywords ?? const [];
+
+  static bool _anyHit(List<String> keys, String lowerText) => keys.any((k) {
+    final key = k.trim().toLowerCase();
+    return key.isNotEmpty && lowerText.contains(key);
+  });
+
+  /// 主关键词命中（忽略大小写）
+  bool matchesPrimary(String text) => _anyHit(keywords, text.toLowerCase());
+
+  /// 次级关键词命中；为空时视为始终满足（无 AND 约束）
+  bool matchesSecondary(String text) =>
+      secondaryKeywords.isEmpty || _anyHit(secondaryKeywords, text.toLowerCase());
+
+  /// 完整触发判定：主关键词命中 且（无次级 或 次级也命中）
+  bool matches(String text) => matchesPrimary(text) && matchesSecondary(text);
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'keywords': keywords,
+    'secondaryKeywords': secondaryKeywords,
+    'content': content,
+    'enabled': enabled,
+    'constant': constant,
+    'order': order,
+  };
+
+  factory WorldBookEntry.fromJson(Map<String, dynamic> json) => WorldBookEntry(
+    id: json['id'],
+    title: json['title'] ?? '',
+    keywords: (json['keywords'] as List?)
+        ?.map((e) => e.toString())
+        .where((s) => s.trim().isNotEmpty)
+        .toList(),
+    secondaryKeywords: (json['secondaryKeywords'] as List?)
+        ?.map((e) => e.toString())
+        .where((s) => s.trim().isNotEmpty)
+        .toList(),
+    content: json['content'] ?? '',
+    enabled: json['enabled'] ?? true,
+    constant: json['constant'] ?? false,
+    order: (json['order'] as num?)?.toInt() ?? 100,
+  );
+
+  WorldBookEntry copyWith({
+    String? title,
+    List<String>? keywords,
+    List<String>? secondaryKeywords,
+    String? content,
+    bool? enabled,
+    bool? constant,
+    int? order,
+  }) => WorldBookEntry(
+    id: id,
+    title: title ?? this.title,
+    keywords: keywords ?? this.keywords,
+    secondaryKeywords: secondaryKeywords ?? this.secondaryKeywords,
+    content: content ?? this.content,
+    enabled: enabled ?? this.enabled,
+    constant: constant ?? this.constant,
+    order: order ?? this.order,
+  );
+}
+
+/// 世界书全局设置
+class WorldBookSettings {
+  bool enabled;
+  int scanDepth; // 关键词扫描的最近消息条数
+  int maxChars; // 单次注入的字符预算（超出按 order 优先截断）
+  bool recursiveScanning; // 递归扫描：已激活条目内容可继续触发其它条目
+  String injectionPosition; // system（系统提示词内）/ depth（聊天记录深处 @Depth）
+  int injectionDepth; // depth 位置时的插入深度
+  String injectionRole; // depth 位置的消息角色
+  List<WorldBookEntry> entries; // 条目列表（可变，页面直接增删改后整体保存）
+
+  WorldBookSettings({
+    this.enabled = false,
+    this.scanDepth = 4,
+    this.maxChars = 1200,
+    this.recursiveScanning = true,
+    // 默认聊天记录深处注入：世界书条目按关键词动态激活，放进系统提示词
+    // 会让供应商前缀缓存每轮失效；depth 注入贴近对话也更自然。
+    this.injectionPosition = 'depth',
+    this.injectionDepth = 2,
+    this.injectionRole = 'system',
+    List<WorldBookEntry>? entries,
+  }) : entries = entries ?? [];
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'scanDepth': scanDepth,
+    'maxChars': maxChars,
+    'recursiveScanning': recursiveScanning,
+    'injectionPosition': injectionPosition,
+    'injectionDepth': injectionDepth,
+    'injectionRole': injectionRole,
+    'entries': entries.map((e) => e.toJson()).toList(),
+  };
+
+  factory WorldBookSettings.fromJson(Map<String, dynamic> json) =>
+      WorldBookSettings(
+        enabled: json['enabled'] ?? false,
+        scanDepth: (json['scanDepth'] as num?)?.toInt() ?? 4,
+        maxChars: (json['maxChars'] as num?)?.toInt() ?? 1200,
+        recursiveScanning: json['recursiveScanning'] ?? true,
+        injectionPosition: json['injectionPosition'] ?? 'depth',
+        injectionDepth: (json['injectionDepth'] as num?)?.toInt() ?? 2,
+        injectionRole: json['injectionRole'] ?? 'system',
+        entries: (json['entries'] as List?)
+            ?.whereType<Map>()
+            .map((e) => WorldBookEntry.fromJson(Map<String, dynamic>.from(e)))
+            .toList(),
+      );
+
+  WorldBookSettings copyWith({
+    bool? enabled,
+    int? scanDepth,
+    int? maxChars,
+    bool? recursiveScanning,
+    String? injectionPosition,
+    int? injectionDepth,
+    String? injectionRole,
+  }) {
+    final next = WorldBookSettings(
+      enabled: enabled ?? this.enabled,
+      scanDepth: scanDepth ?? this.scanDepth,
+      maxChars: maxChars ?? this.maxChars,
+      recursiveScanning: recursiveScanning ?? this.recursiveScanning,
+      injectionPosition: injectionPosition ?? this.injectionPosition,
+      injectionDepth: injectionDepth ?? this.injectionDepth,
+      injectionRole: injectionRole ?? this.injectionRole,
+    );
+    next.entries.addAll(entries);
+    return next;
+  }
+}
+
+/// 生成文本风格：完全由用户自定义的一段风格描述，注入系统提示词（空 = 不注入）
+class GenerationStyleSettings {
+  String stylePrompt;
+
+  GenerationStyleSettings({this.stylePrompt = ''});
+
+  Map<String, dynamic> toJson() => {'stylePrompt': stylePrompt};
+
+  factory GenerationStyleSettings.fromJson(Map<String, dynamic> json) =>
+      GenerationStyleSettings(stylePrompt: json['stylePrompt'] ?? '');
+
+  GenerationStyleSettings copyWith({String? stylePrompt}) =>
+      GenerationStyleSettings(stylePrompt: stylePrompt ?? this.stylePrompt);
 }
 
 enum ToolType { builtin, http }
@@ -272,83 +602,85 @@ class MemoryEntry {
     List<String>? consolidatedFrom,
     List<String>? atomTypes,
     Map<String, dynamic>? extraMetadata,
-  })  : topics = topics ?? const [],
-        keyFacts = keyFacts ?? const [],
-        participants = participants ?? const [],
-        timeTags = timeTags ?? const [],
-        consolidatedFrom = consolidatedFrom ?? const [],
-        atomTypes = atomTypes ?? const [],
-        extraMetadata = extraMetadata ?? const {};
+  }) : topics = topics ?? const [],
+       keyFacts = keyFacts ?? const [],
+       participants = participants ?? const [],
+       timeTags = timeTags ?? const [],
+       consolidatedFrom = consolidatedFrom ?? const [],
+       atomTypes = atomTypes ?? const [],
+       extraMetadata = extraMetadata ?? const {};
 
   /// 注入展示用内容：优先人格口吻摘要，退回正文
-  String get displayContent => personaSummary.isNotEmpty ? personaSummary : content;
+  String get displayContent =>
+      personaSummary.isNotEmpty ? personaSummary : content;
 
   bool get isActive => status == 'active';
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'content': content,
-        'createdAt': createdAt.toIso8601String(),
-        'source': source,
-        'personaId': personaId,
-        'sessionId': sessionId,
-        if (embedding != null) 'embedding': embedding,
-        'importance': importance,
-        'accessCount': accessCount,
-        if (lastAccessTime != null)
-          'lastAccessTime': lastAccessTime!.toIso8601String(),
-        'status': status,
-        if (archivedAt != null) 'archivedAt': archivedAt!.toIso8601String(),
-        'personaSummary': personaSummary,
-        'canonicalSummary': canonicalSummary,
-        'topics': topics,
-        'keyFacts': keyFacts,
-        'participants': participants,
-        'sentiment': sentiment,
-        'interactionType': interactionType,
-        'summaryQuality': summaryQuality,
-        'timeTags': timeTags,
-        'sourceTimeLabel': sourceTimeLabel,
-        'consolidatedFrom': consolidatedFrom,
-        'atomTypes': atomTypes,
-        if (extraMetadata.isNotEmpty) 'extraMetadata': extraMetadata,
-      };
+    'id': id,
+    'content': content,
+    'createdAt': createdAt.toIso8601String(),
+    'source': source,
+    'personaId': personaId,
+    'sessionId': sessionId,
+    if (embedding != null) 'embedding': embedding,
+    'importance': importance,
+    'accessCount': accessCount,
+    if (lastAccessTime != null)
+      'lastAccessTime': lastAccessTime!.toIso8601String(),
+    'status': status,
+    if (archivedAt != null) 'archivedAt': archivedAt!.toIso8601String(),
+    'personaSummary': personaSummary,
+    'canonicalSummary': canonicalSummary,
+    'topics': topics,
+    'keyFacts': keyFacts,
+    'participants': participants,
+    'sentiment': sentiment,
+    'interactionType': interactionType,
+    'summaryQuality': summaryQuality,
+    'timeTags': timeTags,
+    'sourceTimeLabel': sourceTimeLabel,
+    'consolidatedFrom': consolidatedFrom,
+    'atomTypes': atomTypes,
+    if (extraMetadata.isNotEmpty) 'extraMetadata': extraMetadata,
+  };
 
   factory MemoryEntry.fromJson(Map<String, dynamic> json) => MemoryEntry(
-        id: json['id'],
-        content: json['content'],
-        createdAt: DateTime.parse(json['createdAt']),
-        source: json['source'] ?? 'manual',
-        personaId: json['personaId'],
-        sessionId: json['sessionId'],
-        embedding: (json['embedding'] as List?)
-            ?.map((e) => (e as num).toDouble())
-            .toList(),
-        importance: (json['importance'] as num?)?.toDouble() ?? 0.5,
-        accessCount: (json['accessCount'] as num?)?.toInt() ?? 0,
-        lastAccessTime: json['lastAccessTime'] == null
-            ? null
-            : DateTime.tryParse(json['lastAccessTime'] as String),
-        status: json['status'] ?? 'active',
-        archivedAt: json['archivedAt'] == null
-            ? null
-            : DateTime.tryParse(json['archivedAt'] as String),
-        personaSummary: json['personaSummary'] ?? '',
-        canonicalSummary: json['canonicalSummary'] ?? '',
-        topics: _readStringList(json['topics']),
-        keyFacts: _readStringList(json['keyFacts']),
-        participants: _readStringList(json['participants']),
-        sentiment: json['sentiment'],
-        interactionType: json['interactionType'] ??
-            (json['source'] == 'summary' ? 'private_chat' : 'manual'),
-        summaryQuality: json['summaryQuality'],
-        timeTags: _readStringList(json['timeTags']),
-        sourceTimeLabel: json['sourceTimeLabel'],
-        consolidatedFrom: _readStringList(json['consolidatedFrom']),
-        atomTypes: _readStringList(json['atomTypes']),
-        extraMetadata:
-            (json['extraMetadata'] as Map?)?.cast<String, dynamic>() ?? {},
-      );
+    id: json['id'],
+    content: json['content'],
+    createdAt: DateTime.parse(json['createdAt']),
+    source: json['source'] ?? 'manual',
+    personaId: json['personaId'],
+    sessionId: json['sessionId'],
+    embedding: (json['embedding'] as List?)
+        ?.map((e) => (e as num).toDouble())
+        .toList(),
+    importance: (json['importance'] as num?)?.toDouble() ?? 0.5,
+    accessCount: (json['accessCount'] as num?)?.toInt() ?? 0,
+    lastAccessTime: json['lastAccessTime'] == null
+        ? null
+        : DateTime.tryParse(json['lastAccessTime'] as String),
+    status: json['status'] ?? 'active',
+    archivedAt: json['archivedAt'] == null
+        ? null
+        : DateTime.tryParse(json['archivedAt'] as String),
+    personaSummary: json['personaSummary'] ?? '',
+    canonicalSummary: json['canonicalSummary'] ?? '',
+    topics: _readStringList(json['topics']),
+    keyFacts: _readStringList(json['keyFacts']),
+    participants: _readStringList(json['participants']),
+    sentiment: json['sentiment'],
+    interactionType:
+        json['interactionType'] ??
+        (json['source'] == 'summary' ? 'private_chat' : 'manual'),
+    summaryQuality: json['summaryQuality'],
+    timeTags: _readStringList(json['timeTags']),
+    sourceTimeLabel: json['sourceTimeLabel'],
+    consolidatedFrom: _readStringList(json['consolidatedFrom']),
+    atomTypes: _readStringList(json['atomTypes']),
+    extraMetadata:
+        (json['extraMetadata'] as Map?)?.cast<String, dynamic>() ?? {},
+  );
 }
 
 List<String> _readStringList(dynamic raw) {
@@ -407,74 +739,76 @@ class MemoryAtom {
     this.decayType = AtomDecayType.exponential,
     this.sessionId,
     this.personaId,
-  })  : entities = entities ?? const [],
-        lastAccessedAt = lastAccessedAt ?? createdAt,
-        expiresAt = expiresAt ?? createdAt;
+  }) : entities = entities ?? const [],
+       lastAccessedAt = lastAccessedAt ?? createdAt,
+       expiresAt = expiresAt ?? createdAt;
 
   bool isExpired(DateTime now) => !now.isBefore(expiresAt);
 
   /// 时间衰减分（以 lastAccessedAt 为基准）
   double temporalScore(DateTime now) => atomDecayScore(
-      decayType, ttlDays, now.difference(lastAccessedAt).inDays.toDouble());
+    decayType,
+    ttlDays,
+    now.difference(lastAccessedAt).inDays.toDouble(),
+  );
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'parentMemoryId': parentMemoryId,
-        'atomType': atomType.name,
-        'content': content,
-        'entities': entities,
-        'importance': importance,
-        'confidence': confidence,
-        'createdAt': createdAt.toIso8601String(),
-        'lastAccessedAt': lastAccessedAt.toIso8601String(),
-        'lastReinforcedAt': lastReinforcedAt?.toIso8601String(),
-        'eventTime': eventTime?.toIso8601String(),
-        'ttlDays': ttlDays,
-        'expiresAt': expiresAt.toIso8601String(),
-        'status': status.name,
-        'reinforcementCount': reinforcementCount,
-        'decayType': decayType.name,
-        'sessionId': sessionId,
-        'personaId': personaId,
-      };
+    'id': id,
+    'parentMemoryId': parentMemoryId,
+    'atomType': atomType.name,
+    'content': content,
+    'entities': entities,
+    'importance': importance,
+    'confidence': confidence,
+    'createdAt': createdAt.toIso8601String(),
+    'lastAccessedAt': lastAccessedAt.toIso8601String(),
+    'lastReinforcedAt': lastReinforcedAt?.toIso8601String(),
+    'eventTime': eventTime?.toIso8601String(),
+    'ttlDays': ttlDays,
+    'expiresAt': expiresAt.toIso8601String(),
+    'status': status.name,
+    'reinforcementCount': reinforcementCount,
+    'decayType': decayType.name,
+    'sessionId': sessionId,
+    'personaId': personaId,
+  };
 
   factory MemoryAtom.fromJson(Map<String, dynamic> json) => MemoryAtom(
-        id: json['id'],
-        parentMemoryId: json['parentMemoryId'],
-        atomType: AtomType.values.firstWhere(
-          (e) => e.name == json['atomType'],
-          orElse: () => AtomType.unknown,
-        ),
-        content: json['content'] ?? '',
-        entities: _readStringList(json['entities']),
-        importance: (json['importance'] as num?)?.toDouble() ?? 0.5,
-        confidence: (json['confidence'] as num?)?.toDouble() ?? 0.7,
-        createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
-        lastAccessedAt:
-            DateTime.tryParse(json['lastAccessedAt'] ?? '') ??
-                DateTime.tryParse(json['createdAt'] ?? '') ??
-                DateTime.now(),
-        lastReinforcedAt: json['lastReinforcedAt'] == null
-            ? null
-            : DateTime.tryParse(json['lastReinforcedAt'] as String),
-        eventTime: json['eventTime'] == null
-            ? null
-            : DateTime.tryParse(json['eventTime'] as String),
-        ttlDays: (json['ttlDays'] as num?)?.toDouble() ?? 30,
-        expiresAt: DateTime.tryParse(json['expiresAt'] ?? '') ?? DateTime.now(),
-        status: AtomStatus.values.firstWhere(
-          (e) => e.name == json['status'],
-          orElse: () => AtomStatus.active,
-        ),
-        reinforcementCount:
-            (json['reinforcementCount'] as num?)?.toInt() ?? 0,
-        decayType: AtomDecayType.values.firstWhere(
-          (e) => e.name == json['decayType'],
-          orElse: () => AtomDecayType.exponential,
-        ),
-        sessionId: json['sessionId'],
-        personaId: json['personaId'],
-      );
+    id: json['id'],
+    parentMemoryId: json['parentMemoryId'],
+    atomType: AtomType.values.firstWhere(
+      (e) => e.name == json['atomType'],
+      orElse: () => AtomType.unknown,
+    ),
+    content: json['content'] ?? '',
+    entities: _readStringList(json['entities']),
+    importance: (json['importance'] as num?)?.toDouble() ?? 0.5,
+    confidence: (json['confidence'] as num?)?.toDouble() ?? 0.7,
+    createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
+    lastAccessedAt:
+        DateTime.tryParse(json['lastAccessedAt'] ?? '') ??
+        DateTime.tryParse(json['createdAt'] ?? '') ??
+        DateTime.now(),
+    lastReinforcedAt: json['lastReinforcedAt'] == null
+        ? null
+        : DateTime.tryParse(json['lastReinforcedAt'] as String),
+    eventTime: json['eventTime'] == null
+        ? null
+        : DateTime.tryParse(json['eventTime'] as String),
+    ttlDays: (json['ttlDays'] as num?)?.toDouble() ?? 30,
+    expiresAt: DateTime.tryParse(json['expiresAt'] ?? '') ?? DateTime.now(),
+    status: AtomStatus.values.firstWhere(
+      (e) => e.name == json['status'],
+      orElse: () => AtomStatus.active,
+    ),
+    reinforcementCount: (json['reinforcementCount'] as num?)?.toInt() ?? 0,
+    decayType: AtomDecayType.values.firstWhere(
+      (e) => e.name == json['decayType'],
+      orElse: () => AtomDecayType.exponential,
+    ),
+    sessionId: json['sessionId'],
+    personaId: json['personaId'],
+  );
 }
 
 /// 原子时间衰减分（移植自 LivingMemory compute_decay_score）
@@ -616,125 +950,121 @@ class MemorySettings {
   });
 
   Map<String, dynamic> toJson() => {
-        'useSessionFiltering': useSessionFiltering,
-        'memoryScopeMode': memoryScopeMode,
-        'summaryThreshold': summaryThreshold,
-        'autoSummaryEnabled': autoSummaryEnabled,
-        'summaryModel': summaryModel,
-        'includeSourceTimeTags': includeSourceTimeTags,
-        'retrievalCount': retrievalCount,
-        'maxK': maxK,
-        'injectionPosition': injectionPosition,
-        'minImportanceForRetrieval': minImportanceForRetrieval,
-        'minSimilarityForRetrieval': minSimilarityForRetrieval,
-        'recentMemoryCount': recentMemoryCount,
-        'recentMemoryMaxAgeHours': recentMemoryMaxAgeHours,
-        'memoryTypeFilter': memoryTypeFilter,
-        'rrfK': rrfK,
-        'scoreAlpha': scoreAlpha,
-        'scoreBeta': scoreBeta,
-        'scoreGamma': scoreGamma,
-        'mmrLambda': mmrLambda,
-        'graphEnabled': graphEnabled,
-        'atomEnabled': atomEnabled,
-        'documentRouteWeight': documentRouteWeight,
-        'graphRouteWeight': graphRouteWeight,
-        'crossRouteBonus': crossRouteBonus,
-        'dynamicRouteWeighting': dynamicRouteWeighting,
-        'graphExpansionLimit': graphExpansionLimit,
-        'graphExpansionHops': graphExpansionHops,
-        'graphSecondHopWeight': graphSecondHopWeight,
-        'atomForgetDelayDays': atomForgetDelayDays,
-        'atomPurgeDelayDays': atomPurgeDelayDays,
-        'decayRate': decayRate,
-        'protectionThreshold': protectionThreshold,
-        'maxAccessBoost': maxAccessBoost,
-        'accessDecayWindowDays': accessDecayWindowDays,
-        'accessCountDecayMultiplier': accessCountDecayMultiplier,
-        'autoCleanupEnabled': autoCleanupEnabled,
-        'autoArchiveEnabled': autoArchiveEnabled,
-        'cleanupDaysThreshold': cleanupDaysThreshold,
-        'cleanupImportanceThreshold': cleanupImportanceThreshold,
-        'consolidationEnabled': consolidationEnabled,
-        'consolidationGranularity': consolidationGranularity,
-        'consolidationKeepOriginal': consolidationKeepOriginal,
-        'consolidationMinMemoriesPerGroup': consolidationMinMemoriesPerGroup,
-        'consolidationMaxGroupsPerRun': consolidationMaxGroupsPerRun,
-        'consolidationMaxImportance': consolidationMaxImportance,
-        'consolidationMinAgeDays': consolidationMinAgeDays,
-        'consolidationSemanticThreshold': consolidationSemanticThreshold,
-        'consolidationMinIntervalHours': consolidationMinIntervalHours,
-      };
+    'useSessionFiltering': useSessionFiltering,
+    'memoryScopeMode': memoryScopeMode,
+    'summaryThreshold': summaryThreshold,
+    'autoSummaryEnabled': autoSummaryEnabled,
+    'summaryModel': summaryModel,
+    'includeSourceTimeTags': includeSourceTimeTags,
+    'retrievalCount': retrievalCount,
+    'maxK': maxK,
+    'injectionPosition': injectionPosition,
+    'minImportanceForRetrieval': minImportanceForRetrieval,
+    'minSimilarityForRetrieval': minSimilarityForRetrieval,
+    'recentMemoryCount': recentMemoryCount,
+    'recentMemoryMaxAgeHours': recentMemoryMaxAgeHours,
+    'memoryTypeFilter': memoryTypeFilter,
+    'rrfK': rrfK,
+    'scoreAlpha': scoreAlpha,
+    'scoreBeta': scoreBeta,
+    'scoreGamma': scoreGamma,
+    'mmrLambda': mmrLambda,
+    'graphEnabled': graphEnabled,
+    'atomEnabled': atomEnabled,
+    'documentRouteWeight': documentRouteWeight,
+    'graphRouteWeight': graphRouteWeight,
+    'crossRouteBonus': crossRouteBonus,
+    'dynamicRouteWeighting': dynamicRouteWeighting,
+    'graphExpansionLimit': graphExpansionLimit,
+    'graphExpansionHops': graphExpansionHops,
+    'graphSecondHopWeight': graphSecondHopWeight,
+    'atomForgetDelayDays': atomForgetDelayDays,
+    'atomPurgeDelayDays': atomPurgeDelayDays,
+    'decayRate': decayRate,
+    'protectionThreshold': protectionThreshold,
+    'maxAccessBoost': maxAccessBoost,
+    'accessDecayWindowDays': accessDecayWindowDays,
+    'accessCountDecayMultiplier': accessCountDecayMultiplier,
+    'autoCleanupEnabled': autoCleanupEnabled,
+    'autoArchiveEnabled': autoArchiveEnabled,
+    'cleanupDaysThreshold': cleanupDaysThreshold,
+    'cleanupImportanceThreshold': cleanupImportanceThreshold,
+    'consolidationEnabled': consolidationEnabled,
+    'consolidationGranularity': consolidationGranularity,
+    'consolidationKeepOriginal': consolidationKeepOriginal,
+    'consolidationMinMemoriesPerGroup': consolidationMinMemoriesPerGroup,
+    'consolidationMaxGroupsPerRun': consolidationMaxGroupsPerRun,
+    'consolidationMaxImportance': consolidationMaxImportance,
+    'consolidationMinAgeDays': consolidationMinAgeDays,
+    'consolidationSemanticThreshold': consolidationSemanticThreshold,
+    'consolidationMinIntervalHours': consolidationMinIntervalHours,
+  };
 
   factory MemorySettings.fromJson(Map<String, dynamic> json) => MemorySettings(
-        useSessionFiltering: json['useSessionFiltering'] ?? true,
-        memoryScopeMode: json['memoryScopeMode'] as String? ??
-            ((json['useSessionFiltering'] ?? true) == true ? 'session' : 'global'),
-        summaryThreshold: json['summaryThreshold'] ?? 20,
-        autoSummaryEnabled: json['autoSummaryEnabled'] ?? true,
-        summaryModel: json['summaryModel'] ?? '',
-        includeSourceTimeTags: json['includeSourceTimeTags'] ?? true,
-        retrievalCount: json['retrievalCount'] ?? 5,
-        maxK: json['maxK'] ?? 10,
-        injectionPosition: json['injectionPosition'] ?? 'prepend',
-        minImportanceForRetrieval:
-            (json['minImportanceForRetrieval'] as num?)?.toDouble() ?? 0.0,
-        minSimilarityForRetrieval:
-            (json['minSimilarityForRetrieval'] as num?)?.toDouble() ?? 0.0,
-        recentMemoryCount: json['recentMemoryCount'] ?? 2,
-        recentMemoryMaxAgeHours:
-            (json['recentMemoryMaxAgeHours'] as num?)?.toDouble() ?? 72,
-        memoryTypeFilter: json['memoryTypeFilter'] ?? 'all',
-        rrfK: json['rrfK'] ?? 60,
-        scoreAlpha: (json['scoreAlpha'] as num?)?.toDouble() ?? 0.5,
-        scoreBeta: (json['scoreBeta'] as num?)?.toDouble() ?? 0.25,
-        scoreGamma: (json['scoreGamma'] as num?)?.toDouble() ?? 0.25,
-        mmrLambda: (json['mmrLambda'] as num?)?.toDouble() ?? 0.7,
-        graphEnabled: json['graphEnabled'] ?? true,
-        atomEnabled: json['atomEnabled'] ?? true,
-        documentRouteWeight:
-            (json['documentRouteWeight'] as num?)?.toDouble() ?? 0.65,
-        graphRouteWeight:
-            (json['graphRouteWeight'] as num?)?.toDouble() ?? 0.35,
-        crossRouteBonus: (json['crossRouteBonus'] as num?)?.toDouble() ?? 0.08,
-        dynamicRouteWeighting: json['dynamicRouteWeighting'] ?? true,
-        graphExpansionLimit: json['graphExpansionLimit'] ?? 24,
-        graphExpansionHops: json['graphExpansionHops'] ?? 1,
-        graphSecondHopWeight:
-            (json['graphSecondHopWeight'] as num?)?.toDouble() ?? 0.4,
-        atomForgetDelayDays:
-            (json['atomForgetDelayDays'] as num?)?.toDouble() ?? 7,
-        atomPurgeDelayDays:
-            (json['atomPurgeDelayDays'] as num?)?.toDouble() ?? 30,
-        decayRate: (json['decayRate'] as num?)?.toDouble() ?? 0.01,
-        protectionThreshold:
-            (json['protectionThreshold'] as num?)?.toDouble() ?? 1.0,
-        maxAccessBoost: json['maxAccessBoost'] ?? 10,
-        accessDecayWindowDays:
-            (json['accessDecayWindowDays'] as num?)?.toDouble() ?? 30,
-        accessCountDecayMultiplier:
-            (json['accessCountDecayMultiplier'] as num?)?.toDouble() ?? 0.5,
-        autoCleanupEnabled: json['autoCleanupEnabled'] ?? true,
-        autoArchiveEnabled: json['autoArchiveEnabled'] ?? false,
-        cleanupDaysThreshold: json['cleanupDaysThreshold'] ?? 30,
-        cleanupImportanceThreshold:
-            (json['cleanupImportanceThreshold'] as num?)?.toDouble() ?? 0.3,
-        consolidationEnabled: json['consolidationEnabled'] ?? false,
-        consolidationGranularity: json['consolidationGranularity'] ?? 'session',
-        consolidationKeepOriginal:
-            json['consolidationKeepOriginal'] ?? 'archive',
-        consolidationMinMemoriesPerGroup:
-            json['consolidationMinMemoriesPerGroup'] ?? 3,
-        consolidationMaxGroupsPerRun:
-            json['consolidationMaxGroupsPerRun'] ?? 5,
-        consolidationMaxImportance:
-            (json['consolidationMaxImportance'] as num?)?.toDouble() ?? 0.5,
-        consolidationMinAgeDays: json['consolidationMinAgeDays'] ?? 7,
-        consolidationSemanticThreshold:
-            (json['consolidationSemanticThreshold'] as num?)?.toDouble() ?? 0.7,
-        consolidationMinIntervalHours:
-            (json['consolidationMinIntervalHours'] as num?)?.toDouble() ?? 6,
-      );
+    useSessionFiltering: json['useSessionFiltering'] ?? true,
+    memoryScopeMode:
+        json['memoryScopeMode'] as String? ??
+        ((json['useSessionFiltering'] ?? true) == true ? 'session' : 'global'),
+    summaryThreshold: json['summaryThreshold'] ?? 20,
+    autoSummaryEnabled: json['autoSummaryEnabled'] ?? true,
+    summaryModel: json['summaryModel'] ?? '',
+    includeSourceTimeTags: json['includeSourceTimeTags'] ?? true,
+    retrievalCount: json['retrievalCount'] ?? 5,
+    maxK: json['maxK'] ?? 10,
+    injectionPosition: json['injectionPosition'] ?? 'prepend',
+    minImportanceForRetrieval:
+        (json['minImportanceForRetrieval'] as num?)?.toDouble() ?? 0.0,
+    minSimilarityForRetrieval:
+        (json['minSimilarityForRetrieval'] as num?)?.toDouble() ?? 0.0,
+    recentMemoryCount: json['recentMemoryCount'] ?? 2,
+    recentMemoryMaxAgeHours:
+        (json['recentMemoryMaxAgeHours'] as num?)?.toDouble() ?? 72,
+    memoryTypeFilter: json['memoryTypeFilter'] ?? 'all',
+    rrfK: json['rrfK'] ?? 60,
+    scoreAlpha: (json['scoreAlpha'] as num?)?.toDouble() ?? 0.5,
+    scoreBeta: (json['scoreBeta'] as num?)?.toDouble() ?? 0.25,
+    scoreGamma: (json['scoreGamma'] as num?)?.toDouble() ?? 0.25,
+    mmrLambda: (json['mmrLambda'] as num?)?.toDouble() ?? 0.7,
+    graphEnabled: json['graphEnabled'] ?? true,
+    atomEnabled: json['atomEnabled'] ?? true,
+    documentRouteWeight:
+        (json['documentRouteWeight'] as num?)?.toDouble() ?? 0.65,
+    graphRouteWeight: (json['graphRouteWeight'] as num?)?.toDouble() ?? 0.35,
+    crossRouteBonus: (json['crossRouteBonus'] as num?)?.toDouble() ?? 0.08,
+    dynamicRouteWeighting: json['dynamicRouteWeighting'] ?? true,
+    graphExpansionLimit: json['graphExpansionLimit'] ?? 24,
+    graphExpansionHops: json['graphExpansionHops'] ?? 1,
+    graphSecondHopWeight:
+        (json['graphSecondHopWeight'] as num?)?.toDouble() ?? 0.4,
+    atomForgetDelayDays: (json['atomForgetDelayDays'] as num?)?.toDouble() ?? 7,
+    atomPurgeDelayDays: (json['atomPurgeDelayDays'] as num?)?.toDouble() ?? 30,
+    decayRate: (json['decayRate'] as num?)?.toDouble() ?? 0.01,
+    protectionThreshold:
+        (json['protectionThreshold'] as num?)?.toDouble() ?? 1.0,
+    maxAccessBoost: json['maxAccessBoost'] ?? 10,
+    accessDecayWindowDays:
+        (json['accessDecayWindowDays'] as num?)?.toDouble() ?? 30,
+    accessCountDecayMultiplier:
+        (json['accessCountDecayMultiplier'] as num?)?.toDouble() ?? 0.5,
+    autoCleanupEnabled: json['autoCleanupEnabled'] ?? true,
+    autoArchiveEnabled: json['autoArchiveEnabled'] ?? false,
+    cleanupDaysThreshold: json['cleanupDaysThreshold'] ?? 30,
+    cleanupImportanceThreshold:
+        (json['cleanupImportanceThreshold'] as num?)?.toDouble() ?? 0.3,
+    consolidationEnabled: json['consolidationEnabled'] ?? false,
+    consolidationGranularity: json['consolidationGranularity'] ?? 'session',
+    consolidationKeepOriginal: json['consolidationKeepOriginal'] ?? 'archive',
+    consolidationMinMemoriesPerGroup:
+        json['consolidationMinMemoriesPerGroup'] ?? 3,
+    consolidationMaxGroupsPerRun: json['consolidationMaxGroupsPerRun'] ?? 5,
+    consolidationMaxImportance:
+        (json['consolidationMaxImportance'] as num?)?.toDouble() ?? 0.5,
+    consolidationMinAgeDays: json['consolidationMinAgeDays'] ?? 7,
+    consolidationSemanticThreshold:
+        (json['consolidationSemanticThreshold'] as num?)?.toDouble() ?? 0.7,
+    consolidationMinIntervalHours:
+        (json['consolidationMinIntervalHours'] as num?)?.toDouble() ?? 6,
+  );
 
   MemorySettings copyWith({
     bool? useSessionFiltering,
@@ -785,74 +1115,70 @@ class MemorySettings {
     int? consolidationMinAgeDays,
     double? consolidationSemanticThreshold,
     double? consolidationMinIntervalHours,
-  }) =>
-      MemorySettings(
-        useSessionFiltering: useSessionFiltering ?? this.useSessionFiltering,
-        memoryScopeMode: memoryScopeMode ?? this.memoryScopeMode,
-        summaryThreshold: summaryThreshold ?? this.summaryThreshold,
-        autoSummaryEnabled: autoSummaryEnabled ?? this.autoSummaryEnabled,
-        summaryModel: summaryModel ?? this.summaryModel,
-        includeSourceTimeTags:
-            includeSourceTimeTags ?? this.includeSourceTimeTags,
-        retrievalCount: retrievalCount ?? this.retrievalCount,
-        maxK: maxK ?? this.maxK,
-        injectionPosition: injectionPosition ?? this.injectionPosition,
-        minImportanceForRetrieval:
-            minImportanceForRetrieval ?? this.minImportanceForRetrieval,
-        minSimilarityForRetrieval:
-            minSimilarityForRetrieval ?? this.minSimilarityForRetrieval,
-        recentMemoryCount: recentMemoryCount ?? this.recentMemoryCount,
-        recentMemoryMaxAgeHours:
-            recentMemoryMaxAgeHours ?? this.recentMemoryMaxAgeHours,
-        memoryTypeFilter: memoryTypeFilter ?? this.memoryTypeFilter,
-        rrfK: rrfK ?? this.rrfK,
-        scoreAlpha: scoreAlpha ?? this.scoreAlpha,
-        scoreBeta: scoreBeta ?? this.scoreBeta,
-        scoreGamma: scoreGamma ?? this.scoreGamma,
-        mmrLambda: mmrLambda ?? this.mmrLambda,
-        graphEnabled: graphEnabled ?? this.graphEnabled,
-        atomEnabled: atomEnabled ?? this.atomEnabled,
-        documentRouteWeight: documentRouteWeight ?? this.documentRouteWeight,
-        graphRouteWeight: graphRouteWeight ?? this.graphRouteWeight,
-        crossRouteBonus: crossRouteBonus ?? this.crossRouteBonus,
-        dynamicRouteWeighting:
-            dynamicRouteWeighting ?? this.dynamicRouteWeighting,
-        graphExpansionLimit: graphExpansionLimit ?? this.graphExpansionLimit,
-        graphExpansionHops: graphExpansionHops ?? this.graphExpansionHops,
-        graphSecondHopWeight:
-            graphSecondHopWeight ?? this.graphSecondHopWeight,
-        atomForgetDelayDays: atomForgetDelayDays ?? this.atomForgetDelayDays,
-        atomPurgeDelayDays: atomPurgeDelayDays ?? this.atomPurgeDelayDays,
-        decayRate: decayRate ?? this.decayRate,
-        protectionThreshold: protectionThreshold ?? this.protectionThreshold,
-        maxAccessBoost: maxAccessBoost ?? this.maxAccessBoost,
-        accessDecayWindowDays:
-            accessDecayWindowDays ?? this.accessDecayWindowDays,
-        accessCountDecayMultiplier:
-            accessCountDecayMultiplier ?? this.accessCountDecayMultiplier,
-        autoCleanupEnabled: autoCleanupEnabled ?? this.autoCleanupEnabled,
-        autoArchiveEnabled: autoArchiveEnabled ?? this.autoArchiveEnabled,
-        cleanupDaysThreshold: cleanupDaysThreshold ?? this.cleanupDaysThreshold,
-        cleanupImportanceThreshold:
-            cleanupImportanceThreshold ?? this.cleanupImportanceThreshold,
-        consolidationEnabled: consolidationEnabled ?? this.consolidationEnabled,
-        consolidationGranularity:
-            consolidationGranularity ?? this.consolidationGranularity,
-        consolidationKeepOriginal:
-            consolidationKeepOriginal ?? this.consolidationKeepOriginal,
-        consolidationMinMemoriesPerGroup: consolidationMinMemoriesPerGroup ??
-            this.consolidationMinMemoriesPerGroup,
-        consolidationMaxGroupsPerRun:
-            consolidationMaxGroupsPerRun ?? this.consolidationMaxGroupsPerRun,
-        consolidationMaxImportance:
-            consolidationMaxImportance ?? this.consolidationMaxImportance,
-        consolidationMinAgeDays:
-            consolidationMinAgeDays ?? this.consolidationMinAgeDays,
-        consolidationSemanticThreshold: consolidationSemanticThreshold ??
-            this.consolidationSemanticThreshold,
-        consolidationMinIntervalHours:
-            consolidationMinIntervalHours ?? this.consolidationMinIntervalHours,
-      );
+  }) => MemorySettings(
+    useSessionFiltering: useSessionFiltering ?? this.useSessionFiltering,
+    memoryScopeMode: memoryScopeMode ?? this.memoryScopeMode,
+    summaryThreshold: summaryThreshold ?? this.summaryThreshold,
+    autoSummaryEnabled: autoSummaryEnabled ?? this.autoSummaryEnabled,
+    summaryModel: summaryModel ?? this.summaryModel,
+    includeSourceTimeTags: includeSourceTimeTags ?? this.includeSourceTimeTags,
+    retrievalCount: retrievalCount ?? this.retrievalCount,
+    maxK: maxK ?? this.maxK,
+    injectionPosition: injectionPosition ?? this.injectionPosition,
+    minImportanceForRetrieval:
+        minImportanceForRetrieval ?? this.minImportanceForRetrieval,
+    minSimilarityForRetrieval:
+        minSimilarityForRetrieval ?? this.minSimilarityForRetrieval,
+    recentMemoryCount: recentMemoryCount ?? this.recentMemoryCount,
+    recentMemoryMaxAgeHours:
+        recentMemoryMaxAgeHours ?? this.recentMemoryMaxAgeHours,
+    memoryTypeFilter: memoryTypeFilter ?? this.memoryTypeFilter,
+    rrfK: rrfK ?? this.rrfK,
+    scoreAlpha: scoreAlpha ?? this.scoreAlpha,
+    scoreBeta: scoreBeta ?? this.scoreBeta,
+    scoreGamma: scoreGamma ?? this.scoreGamma,
+    mmrLambda: mmrLambda ?? this.mmrLambda,
+    graphEnabled: graphEnabled ?? this.graphEnabled,
+    atomEnabled: atomEnabled ?? this.atomEnabled,
+    documentRouteWeight: documentRouteWeight ?? this.documentRouteWeight,
+    graphRouteWeight: graphRouteWeight ?? this.graphRouteWeight,
+    crossRouteBonus: crossRouteBonus ?? this.crossRouteBonus,
+    dynamicRouteWeighting: dynamicRouteWeighting ?? this.dynamicRouteWeighting,
+    graphExpansionLimit: graphExpansionLimit ?? this.graphExpansionLimit,
+    graphExpansionHops: graphExpansionHops ?? this.graphExpansionHops,
+    graphSecondHopWeight: graphSecondHopWeight ?? this.graphSecondHopWeight,
+    atomForgetDelayDays: atomForgetDelayDays ?? this.atomForgetDelayDays,
+    atomPurgeDelayDays: atomPurgeDelayDays ?? this.atomPurgeDelayDays,
+    decayRate: decayRate ?? this.decayRate,
+    protectionThreshold: protectionThreshold ?? this.protectionThreshold,
+    maxAccessBoost: maxAccessBoost ?? this.maxAccessBoost,
+    accessDecayWindowDays: accessDecayWindowDays ?? this.accessDecayWindowDays,
+    accessCountDecayMultiplier:
+        accessCountDecayMultiplier ?? this.accessCountDecayMultiplier,
+    autoCleanupEnabled: autoCleanupEnabled ?? this.autoCleanupEnabled,
+    autoArchiveEnabled: autoArchiveEnabled ?? this.autoArchiveEnabled,
+    cleanupDaysThreshold: cleanupDaysThreshold ?? this.cleanupDaysThreshold,
+    cleanupImportanceThreshold:
+        cleanupImportanceThreshold ?? this.cleanupImportanceThreshold,
+    consolidationEnabled: consolidationEnabled ?? this.consolidationEnabled,
+    consolidationGranularity:
+        consolidationGranularity ?? this.consolidationGranularity,
+    consolidationKeepOriginal:
+        consolidationKeepOriginal ?? this.consolidationKeepOriginal,
+    consolidationMinMemoriesPerGroup:
+        consolidationMinMemoriesPerGroup ??
+        this.consolidationMinMemoriesPerGroup,
+    consolidationMaxGroupsPerRun:
+        consolidationMaxGroupsPerRun ?? this.consolidationMaxGroupsPerRun,
+    consolidationMaxImportance:
+        consolidationMaxImportance ?? this.consolidationMaxImportance,
+    consolidationMinAgeDays:
+        consolidationMinAgeDays ?? this.consolidationMinAgeDays,
+    consolidationSemanticThreshold:
+        consolidationSemanticThreshold ?? this.consolidationSemanticThreshold,
+    consolidationMinIntervalHours:
+        consolidationMinIntervalHours ?? this.consolidationMinIntervalHours,
+  );
 }
 
 /// 群聊（多角色对话组）
@@ -1131,6 +1457,7 @@ class ChatMessage {
   final String? toolName; // 工具调用产生的消息
   final String? speakerId; // 群聊中发言的角色 ID
   final List<String> mentionIds; // 群聊中用户消息 @ 的角色 ID 列表
+  final MessageQuote? quote; // 引用（回复）的快照信息
   String? stickerId;
   // 运行时标记：AI 正在流式生成中（不持久化）
   bool isStreaming = false;
@@ -1146,6 +1473,7 @@ class ChatMessage {
     this.toolName,
     this.speakerId,
     this.stickerId,
+    this.quote,
     List<String>? mentionIds,
   }) : mentionIds = mentionIds ?? const [];
 
@@ -1158,6 +1486,7 @@ class ChatMessage {
     'speakerId': speakerId,
     'mentionIds': mentionIds,
     'stickerId': stickerId,
+    if (quote != null) 'quote': quote!.toJson(),
   };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -1169,6 +1498,11 @@ class ChatMessage {
     speakerId: json['speakerId'],
     mentionIds: List<String>.from(json['mentionIds'] ?? const []),
     stickerId: json['stickerId'] as String?,
+    quote: json['quote'] == null
+        ? null
+        : MessageQuote.fromJson(
+            Map<String, dynamic>.from(json['quote'] as Map),
+          ),
   );
 }
 

@@ -8,49 +8,44 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 日志级别
-enum LogLevel {
-  debug,
-  info,
-  warning,
-  error,
-}
+enum LogLevel { debug, info, warning, error }
 
 /// 日志级别工具方法
 extension LogLevelX on LogLevel {
   String get label => switch (this) {
-        LogLevel.debug => 'DEBUG',
-        LogLevel.info => 'INFO',
-        LogLevel.warning => 'WARNING',
-        LogLevel.error => 'ERROR',
-      };
+    LogLevel.debug => 'DEBUG',
+    LogLevel.info => 'INFO',
+    LogLevel.warning => 'WARNING',
+    LogLevel.error => 'ERROR',
+  };
 
   String get shortLabel => switch (this) {
-        LogLevel.debug => 'D',
-        LogLevel.info => 'I',
-        LogLevel.warning => 'W',
-        LogLevel.error => 'E',
-      };
+    LogLevel.debug => 'D',
+    LogLevel.info => 'I',
+    LogLevel.warning => 'W',
+    LogLevel.error => 'E',
+  };
 
   int get severity => switch (this) {
-        LogLevel.debug => 0,
-        LogLevel.info => 1,
-        LogLevel.warning => 2,
-        LogLevel.error => 3,
-      };
+    LogLevel.debug => 0,
+    LogLevel.info => 1,
+    LogLevel.warning => 2,
+    LogLevel.error => 3,
+  };
 
   String get name => switch (this) {
-        LogLevel.debug => 'debug',
-        LogLevel.info => 'info',
-        LogLevel.warning => 'warning',
-        LogLevel.error => 'error',
-      };
+    LogLevel.debug => 'debug',
+    LogLevel.info => 'info',
+    LogLevel.warning => 'warning',
+    LogLevel.error => 'error',
+  };
 
   static LogLevel fromName(String? name) => switch (name) {
-        'debug' => LogLevel.debug,
-        'warning' => LogLevel.warning,
-        'error' => LogLevel.error,
-        _ => LogLevel.info,
-      };
+    'debug' => LogLevel.debug,
+    'warning' => LogLevel.warning,
+    'error' => LogLevel.error,
+    _ => LogLevel.info,
+  };
 }
 
 /// 一条日志记录
@@ -74,24 +69,24 @@ class LogEntry {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'timestamp': timestamp.toIso8601String(),
-        'level': level.name,
-        'tag': tag,
-        'message': message,
-        if (error != null) 'error': error,
-        if (stackTrace != null) 'stackTrace': stackTrace,
-      };
+    'id': id,
+    'timestamp': timestamp.toIso8601String(),
+    'level': level.name,
+    'tag': tag,
+    'message': message,
+    if (error != null) 'error': error,
+    if (stackTrace != null) 'stackTrace': stackTrace,
+  };
 
   factory LogEntry.fromJson(Map<String, dynamic> json) => LogEntry(
-        id: json['id'] as String,
-        timestamp: DateTime.parse(json['timestamp'] as String),
-        level: LogLevelX.fromName(json['level'] as String?),
-        tag: json['tag'] as String? ?? 'app',
-        message: json['message'] as String? ?? '',
-        error: json['error'] as String?,
-        stackTrace: json['stackTrace'] as String?,
-      );
+    id: json['id'] as String,
+    timestamp: DateTime.parse(json['timestamp'] as String),
+    level: LogLevelX.fromName(json['level'] as String?),
+    tag: json['tag'] as String? ?? 'app',
+    message: json['message'] as String? ?? '',
+    error: json['error'] as String?,
+    stackTrace: json['stackTrace'] as String?,
+  );
 
   /// 格式化为可复制文本
   String toText() {
@@ -168,11 +163,7 @@ class LoggerService extends ChangeNotifier {
     _prefs = await SharedPreferences.getInstance();
     await _loadFromDisk();
     _initialized = true;
-    log(
-      LogLevel.info,
-      'app',
-      '日志系统已初始化，载入 ${_logs.length} 条历史日志',
-    );
+    log(LogLevel.info, 'app', '日志系统已初始化，载入 ${_logs.length} 条历史日志');
   }
 
   Future<void> _loadFromDisk() async {
@@ -256,8 +247,9 @@ class LoggerService extends ChangeNotifier {
     try {
       final msg = _clip(message);
       final errStr = error == null ? null : _clip(error.toString());
-      final stStr =
-          stackTrace == null ? null : _clip(stackTrace.toString(), maxFieldChars * 2);
+      final stStr = stackTrace == null
+          ? null
+          : _clip(stackTrace.toString(), maxFieldChars * 2);
 
       // 抑制 2 秒内完全相同的 warning/error
       if (level.severity >= LogLevel.warning.severity) {
@@ -272,13 +264,15 @@ class LoggerService extends ChangeNotifier {
         if (_suppressedCount > 0) {
           final suppressed = _suppressedCount;
           _suppressedCount = 0;
-          _logs.add(LogEntry(
-            id: '${now.microsecondsSinceEpoch}_sup',
-            timestamp: now,
-            level: LogLevel.warning,
-            tag: 'app',
-            message: '已抑制 $suppressed 条重复日志',
-          ));
+          _logs.add(
+            LogEntry(
+              id: '${now.microsecondsSinceEpoch}_sup',
+              timestamp: now,
+              level: LogLevel.warning,
+              tag: 'app',
+              message: '已抑制 $suppressed 条重复日志',
+            ),
+          );
         }
         _lastFingerprint = fp;
         _lastFingerprintAt = now;
@@ -362,10 +356,14 @@ class LoggerService extends ChangeNotifier {
     final buf = StringBuffer();
     buf.writeln('# 应用日志导出');
     buf.writeln();
-    buf.writeln('- 导出时间：${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}');
+    buf.writeln(
+      '- 导出时间：${DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now())}',
+    );
     buf.writeln('- 日志总数：${_logs.length} 条');
     final counts = levelCounts;
-    buf.writeln('- 分布：DEBUG ${counts[LogLevel.debug]} · INFO ${counts[LogLevel.info]} · WARNING ${counts[LogLevel.warning]} · ERROR ${counts[LogLevel.error]}');
+    buf.writeln(
+      '- 分布：DEBUG ${counts[LogLevel.debug]} · INFO ${counts[LogLevel.info]} · WARNING ${counts[LogLevel.warning]} · ERROR ${counts[LogLevel.error]}',
+    );
     buf.writeln();
     buf.writeln('| 时间 | 级别 | 标签 | 消息 |');
     buf.writeln('|------|------|------|------|');
@@ -377,9 +375,9 @@ class LoggerService extends ChangeNotifier {
 
   /// 导出为 JSON 字符串
   String exportAsJson() {
-    return const JsonEncoder.withIndent('  ').convert(
-      _logs.map((e) => e.toJson()).toList(),
-    );
+    return const JsonEncoder.withIndent(
+      '  ',
+    ).convert(_logs.map((e) => e.toJson()).toList());
   }
 
   /// 导出为文件，返回文件路径
@@ -482,13 +480,13 @@ class LoggerService extends ChangeNotifier {
 /// 用法：
 /// ```dart
 /// import '../services/logger_service.dart';
-/// log.d('chat', '用户发送消息: $text');
-/// log.i('api', 'API 请求开始');
-/// log.w('memory', '嵌入向量长度不匹配');
-/// log.e('api', '请求失败', error: e, stackTrace: s);
+/// Log.d('chat', '用户发送消息: $text');
+/// Log.i('api', 'API 请求开始');
+/// Log.w('memory', '嵌入向量长度不匹配');
+/// Log.e('api', '请求失败', error: e, stackTrace: s);
 /// ```
-class log {
-  const log._();
+class Log {
+  const Log._();
 
   static void d(String tag, String message) =>
       LoggerService.instance.log(LogLevel.debug, tag, message);
@@ -504,9 +502,13 @@ class log {
     String message, {
     Object? error,
     StackTrace? stackTrace,
-  }) =>
-      LoggerService.instance
-          .log(LogLevel.error, tag, message, error: error, stackTrace: stackTrace);
+  }) => LoggerService.instance.log(
+    LogLevel.error,
+    tag,
+    message,
+    error: error,
+    stackTrace: stackTrace,
+  );
 }
 
 /// 日志导出格式
@@ -516,8 +518,8 @@ enum LogExportFormat {
   json;
 
   String get label => switch (this) {
-        LogExportFormat.text => '纯文本 (.txt)',
-        LogExportFormat.markdown => 'Markdown (.md)',
-        LogExportFormat.json => 'JSON (.json)',
-      };
+    LogExportFormat.text => '纯文本 (.txt)',
+    LogExportFormat.markdown => 'Markdown (.md)',
+    LogExportFormat.json => 'JSON (.json)',
+  };
 }

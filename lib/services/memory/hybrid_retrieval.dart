@@ -87,28 +87,28 @@ class RetrievalConfig {
   });
 
   factory RetrievalConfig.fromSettings(MemorySettings s) => RetrievalConfig(
-        topK: s.retrievalCount,
-        rrfK: s.rrfK,
-        scoreAlpha: s.scoreAlpha,
-        scoreBeta: s.scoreBeta,
-        scoreGamma: s.scoreGamma,
-        mmrLambda: s.mmrLambda,
-        graphEnabled: s.graphEnabled,
-        documentRouteWeight: s.documentRouteWeight,
-        graphRouteWeight: s.graphRouteWeight,
-        crossRouteBonus: s.crossRouteBonus,
-        dynamicRouteWeighting: s.dynamicRouteWeighting,
-        decayRate: s.decayRate,
-        minImportanceForRetrieval: s.minImportanceForRetrieval,
-        minSimilarityForRetrieval: s.minSimilarityForRetrieval,
-        memoryTypeFilter: s.memoryTypeFilter,
-        recentMemoryCount: s.recentMemoryCount,
-        recentMemoryMaxAgeHours: s.recentMemoryMaxAgeHours,
-        atomEnabled: s.atomEnabled,
-        graphExpansionLimit: s.graphExpansionLimit,
-        graphExpansionHops: s.graphExpansionHops,
-        graphSecondHopWeight: s.graphSecondHopWeight,
-      );
+    topK: s.retrievalCount,
+    rrfK: s.rrfK,
+    scoreAlpha: s.scoreAlpha,
+    scoreBeta: s.scoreBeta,
+    scoreGamma: s.scoreGamma,
+    mmrLambda: s.mmrLambda,
+    graphEnabled: s.graphEnabled,
+    documentRouteWeight: s.documentRouteWeight,
+    graphRouteWeight: s.graphRouteWeight,
+    crossRouteBonus: s.crossRouteBonus,
+    dynamicRouteWeighting: s.dynamicRouteWeighting,
+    decayRate: s.decayRate,
+    minImportanceForRetrieval: s.minImportanceForRetrieval,
+    minSimilarityForRetrieval: s.minSimilarityForRetrieval,
+    memoryTypeFilter: s.memoryTypeFilter,
+    recentMemoryCount: s.recentMemoryCount,
+    recentMemoryMaxAgeHours: s.recentMemoryMaxAgeHours,
+    atomEnabled: s.atomEnabled,
+    graphExpansionLimit: s.graphExpansionLimit,
+    graphExpansionHops: s.graphExpansionHops,
+    graphSecondHopWeight: s.graphSecondHopWeight,
+  );
 }
 
 /// 过滤条件（会话/人格 scope）
@@ -151,7 +151,8 @@ Future<List<RetrievalResult>> searchMemories({
     if (scope.strictPersona) {
       if (e.personaId != scope.personaId) return false;
     } else {
-      final personaOk = e.personaId == null ||
+      final personaOk =
+          e.personaId == null ||
           scope.personaId == null ||
           e.personaId == scope.personaId;
       if (!personaOk) return false;
@@ -183,10 +184,11 @@ Future<List<RetrievalResult>> searchMemories({
     }
     vectorScores = scored;
   }
-  final vectorRanking = (vectorScores.entries.toList()
-        ..sort((a, b) => b.value.compareTo(a.value)))
-      .map((e) => e.key)
-      .toList();
+  final vectorRanking =
+      (vectorScores.entries.toList()
+            ..sort((a, b) => b.value.compareTo(a.value)))
+          .map((e) => e.key)
+          .toList();
 
   final fused = rrfFuse(
     [keywordRanking, vectorRanking],
@@ -196,16 +198,17 @@ Future<List<RetrievalResult>> searchMemories({
   final maxRrf = fused.isEmpty ? 1.0 : fused.values.first;
 
   // ---- 文档路加权（照抄 hybrid_retriever._apply_weighting） ----
-  final docWeighted = <String, ({double score, Map<String, double> breakdown})>{};
+  final docWeighted =
+      <String, ({double score, Map<String, double> breakdown})>{};
   for (final e in fused.entries) {
     final m = byId[e.key]!;
     final importance = m.entry.importance.clamp(0.0, 1.0);
     final refTime = _referenceTime(m.entry, current);
     final daysOld = current.difference(refTime).inMilliseconds / 86400000.0;
-    final recency =
-        math.exp(-config.decayRate * (daysOld < 0 ? 0 : daysOld));
+    final recency = math.exp(-config.decayRate * (daysOld < 0 ? 0 : daysOld));
     final relevance = (e.value / maxRrf).clamp(0.0, 1.0);
-    final score = config.scoreAlpha * relevance +
+    final score =
+        config.scoreAlpha * relevance +
         config.scoreBeta * importance +
         config.scoreGamma * recency;
     docWeighted[e.key] = (
@@ -216,7 +219,7 @@ Future<List<RetrievalResult>> searchMemories({
         'recency': recency,
         'keyword_score': keywordScores[e.key] ?? 0.0,
         'vector_score': vectorScores[e.key] ?? 0.0,
-      }
+      },
     );
   }
 
@@ -247,7 +250,9 @@ Future<List<RetrievalResult>> searchMemories({
   // ---- 双路融合（照抄 dual_route_retriever） ----
   var docWeight = config.documentRouteWeight;
   var graphWeight = config.graphRouteWeight;
-  if (config.dynamicRouteWeighting && config.graphEnabled && graphScores.isNotEmpty) {
+  if (config.dynamicRouteWeighting &&
+      config.graphEnabled &&
+      graphScores.isNotEmpty) {
     final (d, g) = _routeWeightsForQuery(query, docWeight, graphWeight);
     docWeight = d;
     graphWeight = g;
@@ -266,7 +271,8 @@ Future<List<RetrievalResult>> searchMemories({
       : graphScores.values.reduce(math.max);
 
   final unionIds = <String>{...docWeighted.keys, ...graphScores.keys};
-  final dualScored = <String, ({double score, Map<String, double> breakdown})>{};
+  final dualScored =
+      <String, ({double score, Map<String, double> breakdown})>{};
   for (final id in unionIds) {
     if (!byId.containsKey(id)) continue;
     final docSignal = docWeighted[id] == null
@@ -275,10 +281,9 @@ Future<List<RetrievalResult>> searchMemories({
     final graphSignal = graphScores[id] == null
         ? 0.0
         : graphScores[id]! / (graphMax > 0 ? graphMax : 1.0);
-    final bonus =
-        (docWeighted.containsKey(id) && graphScores.containsKey(id))
-            ? config.crossRouteBonus
-            : 0.0;
+    final bonus = (docWeighted.containsKey(id) && graphScores.containsKey(id))
+        ? config.crossRouteBonus
+        : 0.0;
     final score = (docWeight * docSignal + graphWeight * graphSignal + bonus)
         .clamp(0.0, 1.0);
     dualScored[id] = (
@@ -289,7 +294,7 @@ Future<List<RetrievalResult>> searchMemories({
         'doc_weight': docWeight,
         'graph_weight': graphWeight,
         'cross_bonus': bonus,
-      }
+      },
     );
   }
 
@@ -299,7 +304,8 @@ Future<List<RetrievalResult>> searchMemories({
     final atomMeta = <String, (String, MemoryAtom)>{};
     for (final m in scoped) {
       for (final atom in m.atoms) {
-        if (atom.status != AtomStatus.active || atom.isExpired(current)) continue;
+        if (atom.status != AtomStatus.active || atom.isExpired(current))
+          continue;
         final key = atom.id;
         atomIndex.addDocument(key, tokenize(atom.content));
         atomMeta[key] = (m.entry.id, atom);
@@ -316,7 +322,7 @@ Future<List<RetrievalResult>> searchMemories({
         final atomScore = (hit.score * temporal).clamp(0.0, 1.0);
         dualScored[memoryId] = (
           score: atomScore,
-          breakdown: {'atom_score': atomScore, 'atom_id_score': hit.score}
+          breakdown: {'atom_score': atomScore, 'atom_id_score': hit.score},
         );
       }
     }
@@ -362,30 +368,38 @@ Future<List<RetrievalResult>> searchMemories({
   final mainSlots = k - recentCount;
   for (final e in ranked) {
     if (results.length >= mainSlots) break;
-    results.add(RetrievalResult(
-      memory: byId[e.key]!,
-      finalScore: e.value.score,
-      breakdown: e.value.breakdown,
-    ));
+    results.add(
+      RetrievalResult(
+        memory: byId[e.key]!,
+        finalScore: e.value.score,
+        breakdown: e.value.breakdown,
+      ),
+    );
     taken.add(e.key);
   }
 
   if (recentCount > 0) {
-    final windowStart =
-        current.subtract(Duration(hours: (config.recentMemoryMaxAgeHours).round()));
-    final recent = scoped
-        .where((m) =>
-            !taken.contains(m.entry.id) &&
-            m.entry.createdAt.isAfter(windowStart))
-        .toList()
-      ..sort((a, b) => b.entry.createdAt.compareTo(a.entry.createdAt));
+    final windowStart = current.subtract(
+      Duration(hours: (config.recentMemoryMaxAgeHours).round()),
+    );
+    final recent =
+        scoped
+            .where(
+              (m) =>
+                  !taken.contains(m.entry.id) &&
+                  m.entry.createdAt.isAfter(windowStart),
+            )
+            .toList()
+          ..sort((a, b) => b.entry.createdAt.compareTo(a.entry.createdAt));
     for (final m in recent.take(recentCount)) {
-      results.add(RetrievalResult(
-        memory: m,
-        finalScore: 1.0,
-        breakdown: const {'recent_memory': 1.0},
-        fromRecent: true,
-      ));
+      results.add(
+        RetrievalResult(
+          memory: m,
+          finalScore: 1.0,
+          breakdown: const {'recent_memory': 1.0},
+          fromRecent: true,
+        ),
+      );
       taken.add(m.entry.id);
     }
   }
@@ -434,7 +448,8 @@ List<String> _applyMmr(
         final sim = jaccard(tokenSets[candidate] ?? {}, tokenSets[s] ?? {});
         if (sim > maxSim) maxSim = sim;
       }
-      final mmr = config.mmrLambda * weighted[candidate]!.score -
+      final mmr =
+          config.mmrLambda * weighted[candidate]!.score -
           (1 - config.mmrLambda) * maxSim;
       if (mmr > bestMmr) {
         bestMmr = mmr;
@@ -459,16 +474,49 @@ List<String> _applyMmr(
   var g = graphWeight;
 
   const relationshipTerms = [
-    '谁', '和谁', '关系', '认识', '朋友', '同事', '家人', '父母', '妈妈', '爸爸',
-    '老师', '同学', 'partner', 'friend', 'relationship', 'with whom',
+    '谁',
+    '和谁',
+    '关系',
+    '认识',
+    '朋友',
+    '同事',
+    '家人',
+    '父母',
+    '妈妈',
+    '爸爸',
+    '老师',
+    '同学',
+    'partner',
+    'friend',
+    'relationship',
+    'with whom',
   ];
   const temporalTerms = [
-    '上次', '昨天', '前天', '刚才', '之前', '什么时候', '哪天', '最近',
-    'last time', 'yesterday', 'recently', 'when',
+    '上次',
+    '昨天',
+    '前天',
+    '刚才',
+    '之前',
+    '什么时候',
+    '哪天',
+    '最近',
+    'last time',
+    'yesterday',
+    'recently',
+    'when',
   ];
   const factualTerms = [
-    '是什么', '什么是', '解释', '定义', '怎么', '如何', 'why', 'what is',
-    'explain', 'define', 'how to',
+    '是什么',
+    '什么是',
+    '解释',
+    '定义',
+    '怎么',
+    '如何',
+    'why',
+    'what is',
+    'explain',
+    'define',
+    'how to',
   ];
 
   final hasRelationship = relationshipTerms.any(q.contains);
