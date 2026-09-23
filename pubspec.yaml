@@ -11,7 +11,6 @@ dependencies:
     sdk: flutter
   characters: ^1.4.0
   file_picker: ^8.3.7
-  flutter_markdown: ^0.7.7+1
   http: ^1.6.0
   image_picker: ^1.2.1
   intl: ^0.20.2
@@ -20,6 +19,7 @@ dependencies:
   share_plus: ^10.1.2
   shared_preferences: ^2.5.3
   uuid: ^4.6.0
+  flutter_markdown_plus: ^1.0.7
 
 dev_dependencies:
   flutter_test:

@@ -55,10 +55,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     final morphFinder = find.byKey(const ValueKey('bubble-morph-a1'));
     expect(morphFinder, findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('bubble-morph-size-a1')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('bubble-morph-size-a1')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('bubble-morph-transform-a1')),
       findsOneWidget,
@@ -131,10 +128,7 @@ void main() {
 
     final morphFinder = find.byKey(const ValueKey('bubble-morph-u2'));
     expect(morphFinder, findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('bubble-morph-size-u2')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('bubble-morph-size-u2')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('bubble-morph-transform-u2')),
       findsOneWidget,
@@ -403,10 +397,7 @@ void main() {
 
     final morphFinder = find.byKey(const ValueKey('bubble-morph-a1'));
     expect(morphFinder, findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('bubble-morph-size-a1')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('bubble-morph-size-a1')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('bubble-morph-transform-a1')),
       findsOneWidget,

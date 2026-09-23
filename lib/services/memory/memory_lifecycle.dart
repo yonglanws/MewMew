@@ -53,9 +53,9 @@ DecayReport applyDailyDecay(
 
     final recentAccessFactor =
         (m.lastAccessTime != null &&
-                current.difference(m.lastAccessTime!).inDays <= accessWindowDays)
-            ? 1.0
-            : 0.5;
+            current.difference(m.lastAccessTime!).inDays <= accessWindowDays)
+        ? 1.0
+        : 0.5;
     final accessFactor = maxAccessBoost > 0
         ? (m.accessCount / maxAccessBoost).clamp(0.0, 1.0)
         : 0.0;
@@ -104,17 +104,20 @@ AtomSweepReport sweepAtoms(
   final current = now ?? DateTime.now();
   var expired = 0, forgotten = 0, purged = 0;
 
-  final forgetDeadline =
-      current.subtract(Duration(milliseconds: (forgetDelayDays * 86400000).round()));
-  final purgeDeadline =
-      current.subtract(Duration(milliseconds: (purgeDelayDays * 86400000).round()));
+  final forgetDeadline = current.subtract(
+    Duration(milliseconds: (forgetDelayDays * 86400000).round()),
+  );
+  final purgeDeadline = current.subtract(
+    Duration(milliseconds: (purgeDelayDays * 86400000).round()),
+  );
 
   atoms.removeWhere((atom) {
     if (atom.status == AtomStatus.active && atom.isExpired(current)) {
       atom.status = AtomStatus.expired;
       expired++;
     }
-    if (atom.status == AtomStatus.expired && atom.expiresAt.isBefore(forgetDeadline)) {
+    if (atom.status == AtomStatus.expired &&
+        atom.expiresAt.isBefore(forgetDeadline)) {
       atom.status = AtomStatus.forgotten;
       forgotten++;
     }
@@ -161,11 +164,13 @@ List<MemoryEntry> findCleanupCandidates(
   final current = now ?? DateTime.now();
   final cutoff = current.subtract(Duration(days: daysThreshold));
   return memories
-      .where((m) =>
-          m.status == 'active' &&
-          m.createdAt.isBefore(cutoff) &&
-          m.importance < importanceThreshold &&
-          m.consolidatedFrom.isEmpty) // 合并产物保留（有溯源价值）
+      .where(
+        (m) =>
+            m.status == 'active' &&
+            m.createdAt.isBefore(cutoff) &&
+            m.importance < importanceThreshold &&
+            m.consolidatedFrom.isEmpty,
+      ) // 合并产物保留（有溯源价值）
       .toList();
 }
 

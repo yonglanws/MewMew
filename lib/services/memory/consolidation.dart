@@ -49,10 +49,12 @@ List<MemoryEntry> findConsolidationCandidates(
   final current = now ?? DateTime.now();
   final cutoff = current.subtract(Duration(days: config.minAgeDays));
   return memories
-      .where((m) =>
-          m.status == 'active' &&
-          m.importance < config.maxImportance &&
-          m.createdAt.isBefore(cutoff))
+      .where(
+        (m) =>
+            m.status == 'active' &&
+            m.importance < config.maxImportance &&
+            m.createdAt.isBefore(cutoff),
+      )
       .toList();
 }
 
@@ -72,8 +74,9 @@ List<List<MemoryEntry>> groupBySemantic(
   List<MemoryEntry> candidates,
   double threshold,
 ) {
-  final withEmbedding =
-      candidates.where((m) => m.embedding != null && m.embedding!.isNotEmpty).toList();
+  final withEmbedding = candidates
+      .where((m) => m.embedding != null && m.embedding!.isNotEmpty)
+      .toList();
   if (withEmbedding.length < 2) return [];
 
   final parent = List<int>.generate(withEmbedding.length, (i) => i);
@@ -94,7 +97,10 @@ List<List<MemoryEntry>> groupBySemantic(
 
   for (var i = 0; i < withEmbedding.length; i++) {
     for (var j = i + 1; j < withEmbedding.length; j++) {
-      final sim = cosineSimilarity(withEmbedding[i].embedding!, withEmbedding[j].embedding!);
+      final sim = cosineSimilarity(
+        withEmbedding[i].embedding!,
+        withEmbedding[j].embedding!,
+      );
       if (sim >= threshold) union(i, j);
     }
   }
@@ -114,10 +120,8 @@ List<List<MemoryEntry>> buildConsolidationGroups(
   final groups = config.granularity == 'semantic'
       ? groupBySemantic(candidates, config.semanticThreshold)
       : groupBySession(candidates);
-  return groups
-      .where((g) => g.length >= config.minMemoriesPerGroup)
-      .toList()
-      ..sort((a, b) => b.length.compareTo(a.length));
+  return groups.where((g) => g.length >= config.minMemoriesPerGroup).toList()
+    ..sort((a, b) => b.length.compareTo(a.length));
 }
 
 /// 为一组待合并记忆构建 LLM 输入（照抄 merge_memories 的 items 结构）
@@ -125,18 +129,25 @@ List<Map<String, dynamic>> buildMergeItems(List<MemoryEntry> group) {
   return group
       .asMap()
       .entries
-      .map((e) => {
-            'id': e.key,
-            'summary': e.value.displayContent,
-            'key_facts': e.value.keyFacts,
-            'topics': e.value.topics,
-          })
+      .map(
+        (e) => {
+          'id': e.key,
+          'summary': e.value.displayContent,
+          'key_facts': e.value.keyFacts,
+          'topics': e.value.topics,
+        },
+      )
       .toList();
 }
 
 /// 解析 LLM 合并输出（容忍栅栏/未闭合；照抄 _parse_merge_response）
-({String summary, List<String> keyFacts, List<String> topics, double importance})?
-    parseMergeResponse(String raw) {
+({
+  String summary,
+  List<String> keyFacts,
+  List<String> topics,
+  double importance,
+})?
+parseMergeResponse(String raw) {
   var text = raw.trim();
   text = text.replaceAll(RegExp(r'^```(?:json)?\s*'), '');
   text = text.replaceAll(RegExp(r'\s*```$'), '').trim();
@@ -166,7 +177,12 @@ List<Map<String, dynamic>> buildMergeItems(List<MemoryEntry> group) {
   var importance = 0.5;
   final rawImp = parsed['importance'];
   if (rawImp is num) importance = rawImp.toDouble().clamp(0.0, 1.0);
-  return (summary: summary, keyFacts: keyFacts, topics: topics, importance: importance);
+  return (
+    summary: summary,
+    keyFacts: keyFacts,
+    topics: topics,
+    importance: importance,
+  );
 }
 
 List<String> _stringList(dynamic raw, int cap) {

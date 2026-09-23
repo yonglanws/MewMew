@@ -11,18 +11,17 @@ MemoryEntry _memory({
   List<String> participants = const [],
   double importance = 0.8,
   String status = 'active',
-}) =>
-    MemoryEntry(
-      id: id,
-      content: content,
-      createdAt: DateTime(2025, 11, 19, 14, 30),
-      importance: importance,
-      personaSummary: personaSummary,
-      topics: topics,
-      keyFacts: keyFacts,
-      participants: participants,
-      status: status,
-    );
+}) => MemoryEntry(
+  id: id,
+  content: content,
+  createdAt: DateTime(2025, 11, 19, 14, 30),
+  importance: importance,
+  personaSummary: personaSummary,
+  topics: topics,
+  keyFacts: keyFacts,
+  participants: participants,
+  status: status,
+);
 
 void main() {
   group('注入格式化', () {
@@ -44,11 +43,7 @@ void main() {
     test('元数据行：主题/参与者/关键事实/来源时间', () {
       final block = formatMemoriesForInjection(
         memories: [
-          _memory(
-            topics: ['会议'],
-            participants: ['张三'],
-            keyFacts: ['明天开会'],
-          ),
+          _memory(topics: ['会议'], participants: ['张三'], keyFacts: ['明天开会']),
         ],
         atomsOf: (_) => const [],
         atomPolicyEnabled: false,
@@ -137,10 +132,7 @@ void main() {
 
     test('剥离旧格式【长期记忆】块', () {
       final messages = <Map<String, dynamic>>[
-        {
-          'role': 'user',
-          'content': '【长期记忆】\n- 旧记忆\n今天天气如何',
-        },
+        {'role': 'user', 'content': '【长期记忆】\n- 旧记忆\n今天天气如何'},
       ];
       expect(stripInjectedMemories(messages), isTrue);
       expect(messages.first['content'], contains('今天天气如何'));

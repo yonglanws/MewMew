@@ -13,7 +13,11 @@ class ToolCallRequest {
   final String name;
   final Map<String, dynamic> arguments;
 
-  ToolCallRequest({required this.id, required this.name, required this.arguments});
+  ToolCallRequest({
+    required this.id,
+    required this.name,
+    required this.arguments,
+  });
 }
 
 /// 流式请求取消令牌
@@ -94,7 +98,7 @@ class AiService {
     required String model,
     required String text,
   }) async {
-    log.d('api', '请求嵌入向量：model=$model 文本长度=${text.length}');
+    Log.d('api', '请求嵌入向量：model=$model 文本长度=${text.length}');
     final resp = await http
         .post(
           Uri.parse(_embeddingsEndpoint(baseUrl)),
@@ -102,28 +106,27 @@ class AiService {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer $apiKey',
           },
-          body: jsonEncode({
-            'model': model,
-            'input': text,
-          }),
+          body: jsonEncode({'model': model, 'input': text}),
         )
         .timeout(const Duration(seconds: 30));
 
     if (resp.statusCode != 200) {
-      log.e('api', '嵌入 API 错误 ${resp.statusCode}');
+      Log.e('api', '嵌入 API 错误 ${resp.statusCode}');
       throw Exception(
-          '嵌入 API 错误 (${resp.statusCode}): ${utf8.decode(resp.bodyBytes)}');
+        '嵌入 API 错误 (${resp.statusCode}): ${utf8.decode(resp.bodyBytes)}',
+      );
     }
 
-    final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final data =
+        jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     final embedding = data['data']?[0]?['embedding'] as List?;
     if (embedding == null) {
-      log.e('api', '嵌入 API 返回格式异常：data 为空');
+      Log.e('api', '嵌入 API 返回格式异常：data 为空');
       throw Exception('嵌入 API 返回格式异常');
     }
     final usage = data['usage'] as Map<String, dynamic>?;
     final inputTokens = _extractInputTokens(usage);
-    log.d('api', '嵌入向量返回：维度=${embedding.length} 输入token=$inputTokens');
+    Log.d('api', '嵌入向量返回：维度=${embedding.length} 输入token=$inputTokens');
     return EmbeddingResult(
       embedding: embedding.map((e) => (e as num).toDouble()).toList(),
       inputTokens: inputTokens,
@@ -146,9 +149,11 @@ class AiService {
     Object? lastError;
     for (var attempt = 0; attempt < maxRetries; attempt++) {
       if (attempt > 0) {
-        final backoff =
-            Duration(milliseconds: ((pow(2, attempt) * 1000).toInt()) +
-                DateTime.now().millisecondsSinceEpoch % 1000);
+        final backoff = Duration(
+          milliseconds:
+              ((pow(2, attempt) * 1000).toInt()) +
+              DateTime.now().millisecondsSinceEpoch % 1000,
+        );
         await Future<void>.delayed(backoff);
       }
       try {
@@ -160,10 +165,14 @@ class AiService {
           ],
           modelOverride: model,
         );
-        return ((resp.content ?? '').trim(), resp.inputTokens, resp.outputTokens);
+        return (
+          (resp.content ?? '').trim(),
+          resp.inputTokens,
+          resp.outputTokens,
+        );
       } catch (e) {
         lastError = e;
-        log.w('api', '记忆任务调用失败（第 ${attempt + 1} 次）', error: e);
+        Log.w('api', '记忆任务调用失败（第 ${attempt + 1} 次）', error: e);
       }
     }
     throw Exception('记忆任务调用连续失败 $maxRetries 次: $lastError');
@@ -174,7 +183,7 @@ class AiService {
     required String baseUrl,
     required String apiKey,
   }) async {
-    log.d('api', '获取模型列表：$baseUrl');
+    Log.d('api', '获取模型列表：$baseUrl');
     final resp = await http
         .get(
           Uri.parse(_modelsEndpoint(baseUrl)),
@@ -183,17 +192,21 @@ class AiService {
         .timeout(const Duration(seconds: 30));
 
     if (resp.statusCode != 200) {
-      log.e('api', '获取模型失败 ${resp.statusCode}');
-      throw Exception('获取模型失败 (${resp.statusCode}): ${utf8.decode(resp.bodyBytes)}');
+      Log.e('api', '获取模型失败 ${resp.statusCode}');
+      throw Exception(
+        '获取模型失败 (${resp.statusCode}): ${utf8.decode(resp.bodyBytes)}',
+      );
     }
-    final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final data =
+        jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     final list = data['data'] as List? ?? [];
-    final models = list
-        .map((m) => (m as Map<String, dynamic>)['id'] as String?)
-        .whereType<String>()
-        .toList()
-      ..sort();
-    log.i('api', '获取到 ${models.length} 个模型');
+    final models =
+        list
+            .map((m) => (m as Map<String, dynamic>)['id'] as String?)
+            .whereType<String>()
+            .toList()
+          ..sort();
+    Log.i('api', '获取到 ${models.length} 个模型');
     return models;
   }
 
@@ -215,14 +228,16 @@ class AiService {
     };
     if (tools.isNotEmpty) {
       body['tools'] = tools
-          .map((t) => {
-                'type': 'function',
-                'function': {
-                  'name': t.name,
-                  'description': t.description,
-                  'parameters': t.paramsSchema,
-                },
-              })
+          .map(
+            (t) => {
+              'type': 'function',
+              'function': {
+                'name': t.name,
+                'description': t.description,
+                'parameters': t.paramsSchema,
+              },
+            },
+          )
           .toList();
     }
     return body;
@@ -235,8 +250,11 @@ class AiService {
     List<ToolConfig> tools = const [],
     String? modelOverride,
   }) async {
-    log.d('api', '非流式请求：model=${modelOverride ?? config.model} '
-        '消息数=${messages.length}');
+    Log.d(
+      'api',
+      '非流式请求：model=${modelOverride ?? config.model} '
+          '消息数=${messages.length}',
+    );
     final resp = await http
         .post(
           Uri.parse(_endpoint(config)),
@@ -244,26 +262,35 @@ class AiService {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ${config.apiKey}',
           },
-          body: jsonEncode(_buildBody(
+          body: jsonEncode(
+            _buildBody(
               config: config,
               messages: messages,
               tools: tools,
-              modelOverride: modelOverride)),
+              modelOverride: modelOverride,
+            ),
+          ),
         )
         .timeout(const Duration(seconds: 120));
 
     if (resp.statusCode != 200) {
-      log.e('api', '非流式请求失败 ${resp.statusCode}');
-      throw Exception('API 错误 (${resp.statusCode}): ${utf8.decode(resp.bodyBytes)}');
+      Log.e('api', '非流式请求失败 ${resp.statusCode}');
+      throw Exception(
+        'API 错误 (${resp.statusCode}): ${utf8.decode(resp.bodyBytes)}',
+      );
     }
 
-    final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final data =
+        jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
     final message = data['choices'][0]['message'] as Map<String, dynamic>;
     final usage = data['usage'] as Map<String, dynamic>?;
     final inputTokens = _extractInputTokens(usage);
     final outputTokens = _extractOutputTokens(usage);
-    log.d('api', '非流式响应：输入=$inputTokens 输出=$outputTokens '
-        '工具调用=${_parseToolCalls(message['tool_calls']).length}');
+    Log.d(
+      'api',
+      '非流式响应：输入=$inputTokens 输出=$outputTokens '
+          '工具调用=${_parseToolCalls(message['tool_calls']).length}',
+    );
     return AiResponse(
       content: message['content'] as String?,
       toolCalls: _parseToolCalls(message['tool_calls']),
@@ -283,8 +310,11 @@ class AiService {
     void Function(String delta)? onDelta,
     CancelToken? cancelToken,
   }) async {
-    log.d('api', '流式请求开始：model=${config.model} '
-        '消息数=${messages.length} 工具数=${tools.length}');
+    Log.d(
+      'api',
+      '流式请求开始：model=${config.model} '
+          '消息数=${messages.length} 工具数=${tools.length}',
+    );
     final client = http.Client();
     cancelToken?._client = client;
     try {
@@ -294,15 +324,26 @@ class AiService {
           'Authorization': 'Bearer ${config.apiKey}',
           'Accept': 'text/event-stream',
         })
-        ..body = jsonEncode(_buildBody(
-            config: config, messages: messages, tools: tools, stream: true));
+        ..body = jsonEncode(
+          _buildBody(
+            config: config,
+            messages: messages,
+            tools: tools,
+            stream: true,
+          ),
+        );
 
-      final resp = await client.send(request).timeout(const Duration(seconds: 120));
+      final resp = await client
+          .send(request)
+          .timeout(const Duration(seconds: 120));
 
       if (resp.statusCode != 200) {
         final body = await resp.stream.bytesToString();
-        log.e('api', '流式请求失败 ${resp.statusCode}：'
-            '${body.length > 200 ? "${body.substring(0, 200)}..." : body}');
+        Log.e(
+          'api',
+          '流式请求失败 ${resp.statusCode}：'
+              '${body.length > 200 ? "${body.substring(0, 200)}..." : body}',
+        );
         throw Exception('API 错误 (${resp.statusCode}): $body');
       }
 
@@ -313,8 +354,9 @@ class AiService {
       Map<String, dynamic>? streamUsage;
 
       try {
-        await for (final chunk
-            in resp.stream.transform(const Utf8Decoder(allowMalformed: true))) {
+        await for (final chunk in resp.stream.transform(
+          const Utf8Decoder(allowMalformed: true),
+        )) {
           if (cancelToken?.isCancelled == true) break;
           buffer += chunk;
           while (true) {
@@ -350,7 +392,9 @@ class AiService {
               for (final tc in delta['tool_calls'] as List) {
                 final idx = (tc['index'] ?? 0) as int;
                 final acc = toolAcc.putIfAbsent(
-                    idx, () => {'id': '', 'name': '', 'args': StringBuffer()});
+                  idx,
+                  () => {'id': '', 'name': '', 'args': StringBuffer()},
+                );
                 if (tc['id'] != null) acc['id'] = tc['id'];
                 final fn = tc['function'] as Map<String, dynamic>?;
                 if (fn != null) {
@@ -368,10 +412,10 @@ class AiService {
       } catch (e) {
         // 被取消时 client.close() 会导致流异常，保留已生成内容
         if (cancelToken?.isCancelled != true) {
-          log.e('api', '流式响应解析异常', error: e);
+          Log.e('api', '流式响应解析异常', error: e);
           rethrow;
         }
-        log.d('api', '流式响应被取消，保留已生成内容');
+        Log.d('api', '流式响应被取消，保留已生成内容');
       }
 
       // 被打断时丢弃未完成的工具调用
@@ -381,14 +425,16 @@ class AiService {
       final rawToolCalls = toolAcc.entries.toList()
         ..sort((a, b) => a.key.compareTo(b.key));
       final toolCallsJson = rawToolCalls
-          .map((e) => {
-                'id': e.value['id'],
-                'type': 'function',
-                'function': {
-                  'name': e.value['name'],
-                  'arguments': (e.value['args'] as StringBuffer).toString(),
-                },
-              })
+          .map(
+            (e) => {
+              'id': e.value['id'],
+              'type': 'function',
+              'function': {
+                'name': e.value['name'],
+                'arguments': (e.value['args'] as StringBuffer).toString(),
+              },
+            },
+          )
           .toList();
 
       final rawMessage = <String, dynamic>{
@@ -422,7 +468,8 @@ class AiService {
       return AiResponse(
         content: content,
         toolCalls: _parseToolCalls(
-            toolCallsJson.isEmpty ? null : toolCallsJson),
+          toolCallsJson.isEmpty ? null : toolCallsJson,
+        ),
         rawMessage: rawMessage,
         inputTokens: _extractInputTokens(finalUsage),
         outputTokens: _extractOutputTokens(finalUsage),
@@ -441,11 +488,13 @@ class AiService {
       try {
         args = jsonDecode(tc['function']['arguments'] ?? '{}');
       } catch (_) {}
-      result.add(ToolCallRequest(
-        id: tc['id'] ?? '',
-        name: tc['function']['name'] ?? '',
-        arguments: args,
-      ));
+      result.add(
+        ToolCallRequest(
+          id: tc['id'] ?? '',
+          name: tc['function']['name'] ?? '',
+          arguments: args,
+        ),
+      );
     }
     return result;
   }
@@ -460,19 +509,28 @@ class AiService {
 
   static int _extractInputTokens(Map<String, dynamic>? usage) {
     if (usage == null) return 0;
-    return _toInt(usage['prompt_tokens'] ?? usage['input_tokens'] ??
-        usage['promptTokens'] ?? usage['inputTokens']);
+    return _toInt(
+      usage['prompt_tokens'] ??
+          usage['input_tokens'] ??
+          usage['promptTokens'] ??
+          usage['inputTokens'],
+    );
   }
 
   static int _extractOutputTokens(Map<String, dynamic>? usage) {
     if (usage == null) return 0;
-    return _toInt(usage['completion_tokens'] ?? usage['output_tokens'] ??
-        usage['completionTokens'] ?? usage['outputTokens']);
+    return _toInt(
+      usage['completion_tokens'] ??
+          usage['output_tokens'] ??
+          usage['completionTokens'] ??
+          usage['outputTokens'],
+    );
   }
 
   static int _extractCachedTokens(Map<String, dynamic>? usage) {
     if (usage == null) return 0;
-    final details = usage['prompt_tokens_details'] ??
+    final details =
+        usage['prompt_tokens_details'] ??
         usage['prompt_token_details'] ??
         usage['cached_tokens'] ??
         usage['cachedTokens'];

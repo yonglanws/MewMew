@@ -6,14 +6,13 @@ MemoryEntry _memory(
   String id, {
   List<String> participants = const [],
   String? sessionId,
-}) =>
-  MemoryEntry(
-    id: id,
-    content: '测试记忆 $id',
-    createdAt: DateTime(2025, 11, 10),
-    participants: participants,
-    sessionId: sessionId,
-  );
+}) => MemoryEntry(
+  id: id,
+  content: '测试记忆 $id',
+  createdAt: DateTime(2025, 11, 10),
+  participants: participants,
+  sessionId: sessionId,
+);
 
 MemoryAtom _atom(
   String parent,
@@ -21,16 +20,15 @@ MemoryAtom _atom(
   List<String> entities = const [],
   double confidence = 0.8,
   AtomType type = AtomType.factual,
-}) =>
-    MemoryAtom(
-      id: 'atom-$content.hashCode',
-      parentMemoryId: parent,
-      content: content,
-      entities: entities,
-      confidence: confidence,
-      atomType: type,
-      createdAt: DateTime(2025, 11, 10),
-    );
+}) => MemoryAtom(
+  id: 'atom-$content.hashCode',
+  parentMemoryId: parent,
+  content: content,
+  entities: entities,
+  confidence: confidence,
+  atomType: type,
+  createdAt: DateTime(2025, 11, 10),
+);
 
 void main() {
   group('图谱构建', () {
@@ -102,7 +100,12 @@ void main() {
     setUp(() {
       store = GraphMemoryStore();
       store.indexMemory(_memory('m1', participants: ['张三']), [
-        _atom('m1', '张三最喜欢的食物是火锅', entities: ['火锅', '食物'], type: AtomType.preference),
+        _atom(
+          'm1',
+          '张三最喜欢的食物是火锅',
+          entities: ['火锅', '食物'],
+          type: AtomType.preference,
+        ),
       ]);
       store.indexMemory(_memory('m2', participants: ['李四']), [
         _atom('m2', '李四负责前端开发', entities: ['前端开发']),
@@ -152,9 +155,16 @@ void main() {
       // 带会话归属的图谱
       final scopedStore = GraphMemoryStore();
       scopedStore.indexMemory(
-          _memory('m1', participants: ['张三'], sessionId: 'session-a'), [
-        _atom('m1', '张三最喜欢的食物是火锅', entities: ['火锅'], type: AtomType.preference),
-      ]);
+        _memory('m1', participants: ['张三'], sessionId: 'session-a'),
+        [
+          _atom(
+            'm1',
+            '张三最喜欢的食物是火锅',
+            entities: ['火锅'],
+            type: AtomType.preference,
+          ),
+        ],
+      );
       final hits = scopedStore.search(
         '张三喜欢吃什么',
         limit: 5,

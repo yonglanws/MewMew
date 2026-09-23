@@ -5,27 +5,21 @@ import 'package:mewmew/services/memory/memory_prompts.dart';
 void main() {
   group('对话格式化', () {
     test('助手消息带 Bot 前缀，用户消息带昵称前缀', () {
-      final text = formatConversationForExtraction(
-        [
-          ExtractionMessage(
-            role: 'user',
-            content: '明天记得开会',
-            timestamp: DateTime(2025, 11, 19, 14, 30),
-            speakerName: '张三',
-          ),
-          ExtractionMessage(
-            role: 'assistant',
-            content: '好的',
-            timestamp: DateTime(2025, 11, 19, 14, 31),
-            speakerName: '小雪',
-          ),
-        ],
-        botDisplayName: '小雪',
-      );
-      expect(
-        text,
-        contains('[张三 | ID: user | 2025-11-19 14:30:00] 明天记得开会'),
-      );
+      final text = formatConversationForExtraction([
+        ExtractionMessage(
+          role: 'user',
+          content: '明天记得开会',
+          timestamp: DateTime(2025, 11, 19, 14, 30),
+          speakerName: '张三',
+        ),
+        ExtractionMessage(
+          role: 'assistant',
+          content: '好的',
+          timestamp: DateTime(2025, 11, 19, 14, 31),
+          speakerName: '小雪',
+        ),
+      ], botDisplayName: '小雪');
+      expect(text, contains('[张三 | ID: user | 2025-11-19 14:30:00] 明天记得开会'));
       expect(text, contains('[Bot: 小雪 |'));
     });
   });
@@ -102,9 +96,16 @@ void main() {
 
   group('质量门', () {
     test('短摘要 / 无事实 / 泛化称呼 → low', () {
-      expect(validateSummaryQuality(summary: '太短', keyFacts: ['有'], importance: 0.5), 'low');
       expect(
-        validateSummaryQuality(summary: '这是一段足够长的摘要文本', keyFacts: [], importance: 0.5),
+        validateSummaryQuality(summary: '太短', keyFacts: ['有'], importance: 0.5),
+        'low',
+      );
+      expect(
+        validateSummaryQuality(
+          summary: '这是一段足够长的摘要文本',
+          keyFacts: [],
+          importance: 0.5,
+        ),
         'low',
       );
       expect(
@@ -174,8 +175,18 @@ void main() {
 
     test('合并提示词包含条目 JSON', () {
       final user = buildConsolidationUserPrompt([
-        {'id': 0, 'summary': '记忆A', 'key_facts': ['a'], 'topics': ['t']},
-        {'id': 1, 'summary': '记忆B', 'key_facts': ['b'], 'topics': []},
+        {
+          'id': 0,
+          'summary': '记忆A',
+          'key_facts': ['a'],
+          'topics': ['t'],
+        },
+        {
+          'id': 1,
+          'summary': '记忆B',
+          'key_facts': ['b'],
+          'topics': [],
+        },
       ]);
       expect(user, contains('共 2 条'));
       expect(user, contains('记忆A'));

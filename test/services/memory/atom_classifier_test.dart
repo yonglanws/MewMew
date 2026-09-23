@@ -6,14 +6,14 @@ void main() {
   final now = DateTime(2025, 11, 19, 14); // 周三
 
   MemoryAtom classify(String fact) => classifyFact(
-        fact: fact,
-        parentMemoryId: 'parent-1',
-        parentImportance: 0.7,
-        entities: const ['张三'],
-        sessionId: 's1',
-        personaId: 'p1',
-        now: now,
-      )!;
+    fact: fact,
+    parentMemoryId: 'parent-1',
+    parentImportance: 0.7,
+    entities: const ['张三'],
+    sessionId: 's1',
+    personaId: 'p1',
+    now: now,
+  )!;
 
   group('原子分类（规则优先级照抄原版）', () {
     test('时间词 + 动作词 → planned，并解析事件时间', () {
@@ -37,9 +37,13 @@ void main() {
       expect(atom.decayType, AtomDecayType.linear);
     });
 
-    test('状态动词 → factual', () => expect(
+    test(
+      '状态动词 → factual',
+      () => expect(
         classify('项目仓库的地址是 github.com/example').atomType,
-        AtomType.factual));
+        AtomType.factual,
+      ),
+    );
 
     test('仅动作词 → episodic', () {
       final atom = classify('张三提交了代码');
@@ -70,34 +74,19 @@ void main() {
 
   group('中文相对时间解析', () {
     test('明天', () {
-      expect(
-        parseChineseRelativeTime('明天见面', now),
-        DateTime(2025, 11, 20),
-      );
+      expect(parseChineseRelativeTime('明天见面', now), DateTime(2025, 11, 20));
     });
     test('昨天', () {
-      expect(
-        parseChineseRelativeTime('昨天聊过', now),
-        DateTime(2025, 11, 18),
-      );
+      expect(parseChineseRelativeTime('昨天聊过', now), DateTime(2025, 11, 18));
     });
     test('后天', () {
-      expect(
-        parseChineseRelativeTime('后天出发', now),
-        DateTime(2025, 11, 21),
-      );
+      expect(parseChineseRelativeTime('后天出发', now), DateTime(2025, 11, 21));
     });
     test('N月D日（未来保留当年）', () {
-      expect(
-        parseChineseRelativeTime('12月1日聚会', now),
-        DateTime(2025, 12, 1),
-      );
+      expect(parseChineseRelativeTime('12月1日聚会', now), DateTime(2025, 12, 1));
     });
     test('N月D日（已过顺延一年）', () {
-      expect(
-        parseChineseRelativeTime('1月5日的约定', now),
-        DateTime(2026, 1, 5),
-      );
+      expect(parseChineseRelativeTime('1月5日的约定', now), DateTime(2026, 1, 5));
     });
     test('无法解析返回 null', () {
       expect(parseChineseRelativeTime('随便聊聊', now), isNull);
@@ -156,11 +145,7 @@ void main() {
 
     test('指数衰减半衰期为 ttl/2', () {
       // ttl=30 → 半衰期 15 天 → 15 天后分数应为 0.5
-      final score = atomDecayScore(
-        AtomDecayType.exponential,
-        30,
-        15,
-      );
+      final score = atomDecayScore(AtomDecayType.exponential, 30, 15);
       expect(score, closeTo(0.5, 0.01));
     });
 

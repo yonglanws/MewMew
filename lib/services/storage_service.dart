@@ -45,12 +45,15 @@ class StorageService {
   static const _kStickerGroups = 'sticker_groups_v2';
   static const _kPersonaStickerBindings = 'persona_sticker_bindings_v2';
   static const _kPersonaStickerSettings = 'persona_sticker_settings_v1';
+  static const _kPromptInjectionSettings = 'prompt_injection_settings_v1';
+  static const _kWorldBookSettings = 'world_book_settings_v1';
+  static const _kGenerationStyleSettings = 'generation_style_settings_v1';
 
   late SharedPreferences _prefs;
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    log.d('storage', 'SharedPreferences 初始化完成');
+    Log.d('storage', 'SharedPreferences 初始化完成');
   }
 
   List<T> _loadList<T>(String key, T Function(Map<String, dynamic>) fromJson) {
@@ -61,7 +64,7 @@ class StorageService {
           .map((e) => fromJson(e as Map<String, dynamic>))
           .toList();
     } catch (e) {
-      log.w('storage', '反序列化 $key 失败，重置为空列表', error: e);
+      Log.w('storage', '反序列化 $key 失败，重置为空列表', error: e);
       return [];
     }
   }
@@ -136,7 +139,7 @@ class StorageService {
     if (migrated) {
       // 一次性写出分离格式，并清掉 memories 里的内联向量
       unawaited(_saveMemoryEntries(entries, embeddings));
-      log.i('storage', '记忆嵌入向量迁移到独立存储：${embeddings.length} 条');
+      Log.i('storage', '记忆嵌入向量迁移到独立存储：${embeddings.length} 条');
     }
     return entries;
   }
@@ -147,10 +150,8 @@ class StorageService {
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       return decoded.map(
-        (k, v) => MapEntry(
-          k,
-          (v as List).map((e) => (e as num).toDouble()).toList(),
-        ),
+        (k, v) =>
+            MapEntry(k, (v as List).map((e) => (e as num).toDouble()).toList()),
       );
     } catch (_) {
       return {};
@@ -198,8 +199,8 @@ class StorageService {
   }
 
   Future<void> saveMemoryReflectionState(
-          Map<String, Map<String, dynamic>> state) =>
-      _prefs.setString(_kMemoryReflectionState, jsonEncode(state));
+    Map<String, Map<String, dynamic>> state,
+  ) => _prefs.setString(_kMemoryReflectionState, jsonEncode(state));
 
   // 维护状态：上次衰减执行日期 / 上次整理时间
   Map<String, dynamic> loadMemoryMaintenanceState() {
@@ -373,6 +374,54 @@ class StorageService {
   bool get streamOutputEnabled => _prefs.getBool(_kStreamOutputEnabled) ?? true;
   Future<void> setStreamOutputEnabled(bool v) =>
       _prefs.setBool(_kStreamOutputEnabled, v);
+
+  // 提示词注入设置（设置-提示词-提示词注入）
+  PromptInjectionSettings loadPromptInjectionSettings() {
+    final raw = _prefs.getString(_kPromptInjectionSettings);
+    if (raw == null) return PromptInjectionSettings();
+    try {
+      return PromptInjectionSettings.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      return PromptInjectionSettings();
+    }
+  }
+
+  Future<void> savePromptInjectionSettings(PromptInjectionSettings s) =>
+      _prefs.setString(_kPromptInjectionSettings, jsonEncode(s.toJson()));
+
+  // 世界书（设置-提示词-世界书）
+  WorldBookSettings loadWorldBookSettings() {
+    final raw = _prefs.getString(_kWorldBookSettings);
+    if (raw == null) return WorldBookSettings();
+    try {
+      return WorldBookSettings.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      return WorldBookSettings();
+    }
+  }
+
+  Future<void> saveWorldBookSettings(WorldBookSettings s) =>
+      _prefs.setString(_kWorldBookSettings, jsonEncode(s.toJson()));
+
+  // 生成文本风格参数合集
+  GenerationStyleSettings loadGenerationStyleSettings() {
+    final raw = _prefs.getString(_kGenerationStyleSettings);
+    if (raw == null) return GenerationStyleSettings();
+    try {
+      return GenerationStyleSettings.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      return GenerationStyleSettings();
+    }
+  }
+
+  Future<void> saveGenerationStyleSettings(GenerationStyleSettings s) =>
+      _prefs.setString(_kGenerationStyleSettings, jsonEncode(s.toJson()));
 
   StickerSendMode get stickerSendMode {
     final rawMode = _prefs.getString(_kStickerSendMode);

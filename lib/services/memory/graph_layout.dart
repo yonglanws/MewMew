@@ -84,7 +84,9 @@ GraphLayoutPositions computeGraphLayout(
 ) {
   if (nodes.isEmpty) return {};
   if (nodes.length == 1) {
-    return {nodes.first.id: [0.0, 0.0]};
+    return {
+      nodes.first.id: [0.0, 0.0],
+    };
   }
 
   // ---- 1. 拓扑种子：社群划分 ----
@@ -136,8 +138,10 @@ GraphLayoutPositions computeGraphLayout(
       }
     }
   }
-  final orphans =
-      nodes.where((n) => !communityOf.containsKey(n.id)).map((n) => n.id).toList();
+  final orphans = nodes
+      .where((n) => !communityOf.containsKey(n.id))
+      .map((n) => n.id)
+      .toList();
   final island = hubs.length;
   if (orphans.length > 1) {
     for (final id in orphans) {
@@ -187,12 +191,16 @@ GraphLayoutPositions computeGraphLayout(
     final c = centerOf[cid]!;
     final radius = i == 0 ? 0.0 : 22 * math.sqrt(i);
     final angle = i * 2.3999632297;
-    pos[n.id] = [c[0] + radius * math.cos(angle), c[1] + radius * math.sin(angle)];
+    pos[n.id] = [
+      c[0] + radius * math.cos(angle),
+      c[1] + radius * math.sin(angle),
+    ];
   }
   // 重合节点给确定性角度踢
   final seen = <String, String>{};
   for (final n in nodes) {
-    final key = '${pos[n.id]![0].toStringAsFixed(3)},${pos[n.id]![1].toStringAsFixed(3)}';
+    final key =
+        '${pos[n.id]![0].toStringAsFixed(3)},${pos[n.id]![1].toStringAsFixed(3)}';
     if (seen.containsKey(key)) {
       final h = fnv1a(n.id);
       final angle = (h % 360) * math.pi / 180;
@@ -207,8 +215,9 @@ GraphLayoutPositions computeGraphLayout(
   final nodeById = {for (final n in nodes) n.id: n};
   final iterationCount = _iterationCount(nodes.length);
   final large = nodes.length > 220;
-  final double effectiveRange =
-      large ? 0.0 : 280.0 + math.min(120.0, nodes.length * 1.2);
+  final double effectiveRange = large
+      ? 0.0
+      : 280.0 + math.min(120.0, nodes.length * 1.2);
   // 大图用均匀网格加速斥力（cell = range/1.8，range = cell*1.8 = 280）
   final gridCell = 156.0;
   final gridRange = gridCell * 1.8;
@@ -230,9 +239,7 @@ GraphLayoutPositions computeGraphLayout(
     if (!large) {
       for (var i = 0; i < nodes.length; i++) {
         for (var j = i + 1; j < nodes.length; j++) {
-          _repelPair(
-            nodes[i], nodes[j], pos, force, cooled, effectiveRange,
-          );
+          _repelPair(nodes[i], nodes[j], pos, force, cooled, effectiveRange);
         }
       }
     } else {
@@ -245,8 +252,7 @@ GraphLayoutPositions computeGraphLayout(
         final cy = (pos[n.id]![1] / gridCell).floor();
         final neighborIds = <String>{
           for (var dx = -1; dx <= 1; dx++)
-            for (var dy = -1; dy <= 1; dy++)
-              ...?grid['${cx + dx}:${cy + dy}'],
+            for (var dy = -1; dy <= 1; dy++) ...?grid['${cx + dx}:${cy + dy}'],
         };
         for (final otherId in neighborIds) {
           if (otherId == n.id) continue;
@@ -262,11 +268,12 @@ GraphLayoutPositions computeGraphLayout(
       final a = pos[e.source];
       final b = pos[e.target];
       if (a == null || b == null) continue;
-      final sameCommunity =
-          communityOf[e.source] == communityOf[e.target];
+      final sameCommunity = communityOf[e.source] == communityOf[e.target];
       final h = fnv1a(e.id);
       final jitter = ((h % 100) / 100 - 0.5) * 2; // -1..1
-      var desired = (_linkDistance + jitter * 34 -
+      var desired =
+          (_linkDistance +
+              jitter * 34 -
               math.min(1.5, math.sqrt(e.weight) * 0.3) * 15) *
           (sameCommunity ? 0.82 : 1.55);
       var strength = _linkStrength * cooled;
@@ -287,8 +294,7 @@ GraphLayoutPositions computeGraphLayout(
     // 向心（社群锚点 + 原点弱引力）
     for (final n in nodes) {
       final c = centerOf[communityOf[n.id]]!;
-      final anchorStrength =
-          large ? 0.045 * cooled : _gravity * 1.45;
+      final anchorStrength = large ? 0.045 * cooled : _gravity * 1.45;
       final massFactor =
           1 + math.sqrt(n.weight) * 0.1 + math.sqrt(degreeOf[n.id]!) * 0.05;
       force[n.id]![0] += (c[0] - pos[n.id]![0]) * anchorStrength / massFactor;
@@ -337,7 +343,8 @@ void _repelPair(
     dx = 1;
     dy = 0;
   }
-  var repulse = _repulsion * cooled / math.max(dist * dist, minSep * minSep / 4);
+  var repulse =
+      _repulsion * cooled / math.max(dist * dist, minSep * minSep / 4);
   if (range > 0 && dist < range) {
     final falloff = 1 - dist / range;
     repulse *= falloff * falloff;
@@ -364,8 +371,7 @@ bool isProminentNode({
   required int degree,
   required int memoryCount,
   required double labelScore,
-}) =>
-    degree >= 5 || memoryCount >= 4 || labelScore >= 15;
+}) => degree >= 5 || memoryCount >= 4 || labelScore >= 15;
 
 /// labelScore = degree*2 + memoryCount*3 + entryCount + weight
 double labelScoreOf({
@@ -373,8 +379,7 @@ double labelScoreOf({
   required int memoryCount,
   required int entryCount,
   required double weight,
-}) =>
-    degree * 2 + memoryCount * 3 + entryCount + weight;
+}) => degree * 2 + memoryCount * 3 + entryCount + weight;
 
 /// 标签可见性门槛。
 /// [scale] 当前缩放；[selected] 是否选中；[hasSelection] 画布上是否有选中；
@@ -407,10 +412,7 @@ bool labelBoxesOverlap(
 }
 
 /// 事实标签清理：剥离人物名前缀与日期前缀（照抄 graph-2d.js FACT_DATE_PREFIX_RE）
-String cleanupFactLabel(
-  String label,
-  Iterable<String> personNames,
-) {
+String cleanupFactLabel(String label, Iterable<String> personNames) {
   var text = label.trim();
   // 日期前缀：2025-11-20、11月20日、2025年11月 等
   final datePrefix = RegExp(
@@ -418,9 +420,7 @@ String cleanupFactLabel(
   );
   text = text.replaceAll(datePrefix, '');
   // 人物名前缀（最长优先，最多剥 2 层）；剥完去掉开头的连接字
-  final names = personNames
-      .where((n) => n.trim().isNotEmpty)
-      .toList()
+  final names = personNames.where((n) => n.trim().isNotEmpty).toList()
     ..sort((a, b) => b.length.compareTo(a.length));
   var stripped = 0;
   for (final name in names) {
@@ -428,8 +428,20 @@ String cleanupFactLabel(
     if (text.startsWith(name) && text.length - name.length >= 2) {
       text = text.substring(name.length).trimLeft();
       while (text.isNotEmpty &&
-          const {'的', '在', '是', '要', '已', '把', '和', '说', ':', '：', '，', ' '}
-              .contains(text[0])) {
+          const {
+            '的',
+            '在',
+            '是',
+            '要',
+            '已',
+            '把',
+            '和',
+            '说',
+            ':',
+            '：',
+            '，',
+            ' ',
+          }.contains(text[0])) {
         text = text.substring(1);
       }
       stripped++;
@@ -456,7 +468,8 @@ double nodeWorldRadius({
   bool isCenter = false,
   bool selected = false,
 }) {
-  var r = 4.0 +
+  var r =
+      4.0 +
       math.sqrt(clampDouble(weight, 0, 20)) * 0.75 +
       math.sqrt(clampDouble(memoryCount.toDouble(), 0, 15)) * 0.4;
   if (isCenter) {
@@ -474,10 +487,7 @@ double nodeWorldRadius({
 }) {
   final w = math.max(1.0, bounds.width);
   final h = math.max(1.0, bounds.height);
-  var scale = math.min(
-    viewportWidth * 0.92 / w,
-    viewportHeight * 0.92 / h,
-  );
+  var scale = math.min(viewportWidth * 0.92 / w, viewportHeight * 0.92 / h);
   scale = clampDouble(scale, 0.06, 1.65);
   final tx = viewportWidth / 2 - bounds.centerX * scale;
   final ty = viewportHeight / 2 - bounds.centerY * scale;
@@ -506,9 +516,12 @@ double edgeBend(String edgeId, double length) {
 
 /// 贝塞尔二次曲线上的点（t ∈ [0,1]），粒子与命中测试可用
 List<double> quadraticPoint(
-  double x0, double y0,
-  double cx, double cy,
-  double x1, double y1,
+  double x0,
+  double y0,
+  double cx,
+  double cy,
+  double x1,
+  double y1,
   double t,
 ) {
   final mt = 1 - t;

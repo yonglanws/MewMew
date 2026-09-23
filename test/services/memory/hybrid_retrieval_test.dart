@@ -52,8 +52,22 @@ void main() {
       final results = await searchMemories(
         query: '喜欢猫',
         candidates: [
-          _mem(_entry('same-other-session', content: '用户喜欢猫', personaId: 'p1', sessionId: 's2')),
-          _mem(_entry('other-persona', content: '用户喜欢猫', personaId: 'p2', sessionId: 's1')),
+          _mem(
+            _entry(
+              'same-other-session',
+              content: '用户喜欢猫',
+              personaId: 'p1',
+              sessionId: 's2',
+            ),
+          ),
+          _mem(
+            _entry(
+              'other-persona',
+              content: '用户喜欢猫',
+              personaId: 'p2',
+              sessionId: 's1',
+            ),
+          ),
           _mem(_entry('unscoped', content: '用户喜欢猫', sessionId: 's1')),
         ],
         scope: const RetrievalScope(
@@ -104,9 +118,7 @@ void main() {
       final results = await searchMemories(
         query: '完全一致的主题内容',
         candidates: [
-          _mem(
-            _entry('vec-match', content: '完全一致的主题内容', embedding: [1, 0, 0]),
-          ),
+          _mem(_entry('vec-match', content: '完全一致的主题内容', embedding: [1, 0, 0])),
           _mem(_entry('bm25-only', content: '完全一致的主题内容但换些说法')),
         ],
         scope: const RetrievalScope(sessionFiltering: false),
@@ -143,7 +155,13 @@ void main() {
       final results = await searchMemories(
         query: '完全无关的量子物理',
         candidates: [
-          _mem(_entry('fresh', content: '刚聊过的日常琐事记录', createdAt: DateTime(2025, 11, 19, 12))),
+          _mem(
+            _entry(
+              'fresh',
+              content: '刚聊过的日常琐事记录',
+              createdAt: DateTime(2025, 11, 19, 12),
+            ),
+          ),
         ],
         scope: const RetrievalScope(sessionFiltering: false),
         config: const RetrievalConfig(topK: 3, recentMemoryCount: 1),

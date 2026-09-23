@@ -42,7 +42,7 @@ ImportReport importMemoriesJson(
   String raw, {
   required List<MemoryEntry> existingMemories,
   String Function(String content, String? sessionId, String? personaId)?
-      newIdGenerator,
+  newIdGenerator,
 }) {
   final decoded = jsonDecode(raw);
   if (decoded is! Map<String, dynamic>) {

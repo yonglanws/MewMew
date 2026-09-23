@@ -7,7 +7,7 @@ import 'package:flutter/rendering.dart'
     show ClipRectLayer, LayerHandle, PaintingContext, RenderAligningShiftedBox;
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../models/models.dart';
@@ -158,6 +158,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   int _timeAnchorMessageCount = -1;
   String? _timeAnchorLastMessageId;
   Set<String> _timeAnchorIds = const {};
+  // —— 消息交互：引用 / 多选 ——
+  MessageQuote? _pendingQuote; // 待发送的引用（输入框上方预览）
+  bool _selectionMode = false; // 多选模式
+  final Set<String> _selectedIds = {}; // 多选已选消息 id
 
   @override
   void initState() {
@@ -422,10 +426,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final isGroup = session?.isGroup ?? false;
     final mentions = isGroup ? _validMentions() : <String>[];
     final needsApi = !isGroup || mentions.isNotEmpty;
-    if (needsApi && state.activeApi == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('请先在设置中配置 AI 接口')));
+    if (needsApi && state.activeModelName == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在设置中配置供应商并选择模型')),
+      );
       return null;
     }
     return (text: text, mentions: mentions);
@@ -453,6 +457,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     _previousInput = TextEditingValue.empty;
     _mentionQuery = null;
     _mentionStart = -1;
+    _pendingQuote = null;
   }
 
   Future<void> _send() async {
@@ -460,11 +465,239 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final input = _validateInput(state);
     if (input == null) return;
 
+    final quote = _pendingQuote;
     _resetInputState();
     setState(() {});
-    await state.sendMessage(input.text, mentionedPersonaIds: input.mentions);
+    await state.sendMessage(
+      input.text,
+      mentionedPersonaIds: input.mentions,
+      quote: quote,
+    );
   }
 
+  // ---------- 消息交互：长按菜单 / 引用 / 多选 ----------
+
+  void _setQuote(ChatMessage message) {
+    final state = context.read<AppState>();
+    final isUser = message.role == 'user';
+    final session = state.currentSession;
+    final isGroup = session?.isGroup ?? false;
+    final author = isUser
+        ? (state.userProfile.name)
+        : (state.personaById(message.speakerId)?.name ??
+              (session != null && !isGroup
+                  ? state.personaOf(session)?.name
+                  : null) ??
+              '对方');
+    final text = message.content.trim();
+    if (text.isEmpty) return;
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _pendingQuote = MessageQuote(
+        messageId: message.id,
+        authorName: author,
+        text: text.characters.length > 200
+            ? '${text.characters.take(200)}…'
+            : text,
+      );
+    });
+  }
+
+  void _toggleSelectMessage(ChatMessage message) {
+    if (message.role != 'user' && message.role != 'assistant') return;
+    HapticFeedback.lightImpact();
+    setState(() {
+      if (_selectedIds.contains(message.id)) {
+        _selectedIds.remove(message.id);
+      } else {
+        _selectedIds.add(message.id);
+      }
+    });
+  }
+
+  void _enterSelectionMode(String messageId) {
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _selectionMode = true;
+      _selectedIds.clear();
+      _selectedIds.add(messageId);
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelectAllVisible() {
+    final session = context.read<AppState>().currentSession;
+    if (session == null) return;
+    HapticFeedback.selectionClick();
+    final selectable = session.messages
+        .where((m) => m.role == 'user' || m.role == 'assistant')
+        .map((m) => m.id)
+        .toSet();
+    setState(() {
+      if (_selectedIds.length >= selectable.length) {
+        _selectedIds.clear();
+      } else {
+        _selectedIds
+          ..clear()
+          ..addAll(selectable);
+      }
+    });
+  }
+
+  Future<void> _copyMessages(List<ChatMessage> messages) async {
+    final texts = messages
+        .where(
+          (m) =>
+              (m.role == 'user' || m.role == 'assistant') &&
+              m.content.trim().isNotEmpty,
+        )
+        .map((m) => m.content.trim())
+        .toList();
+    if (texts.isEmpty) return;
+    unawaited(Clipboard.setData(ClipboardData(text: texts.join('\n'))));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(texts.length > 1 ? '已复制 ${texts.length} 条消息' : '已复制')),
+    );
+  }
+
+  Future<void> _deleteMessages(List<String> messageIds) async {
+    final state = context.read<AppState>();
+    final session = state.currentSession;
+    if (session == null) return;
+    // 删除正在生成的消息会先停止回复（deleteMessage 内处理）
+    for (final id in messageIds) {
+      state.deleteMessage(session.id, id);
+    }
+    if (_selectedIds.isNotEmpty) {
+      _exitSelectionMode();
+    }
+  }
+
+  Future<void> _confirmDeleteMessages(List<String> messageIds) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除消息'),
+        content: Text(
+          messageIds.length > 1
+              ? '确定删除选中的 ${messageIds.length} 条消息吗？删除后不会出现在对话上下文中。'
+              : '确定删除这条消息吗？删除后不会出现在对话上下文中。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.errorContainer,
+              foregroundColor: Theme.of(ctx).colorScheme.onErrorContainer,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _deleteMessages(messageIds);
+    }
+  }
+
+  /// 长按悬浮菜单：按压动效结束后在气泡附近弹出浅色主题面板。
+  Future<void> _showMessageMenu(
+    BuildContext bubbleContext,
+    ChatMessage message,
+  ) async {
+    final action = await _showMessageActionPanel(bubbleContext, message);
+    if (action == null || !mounted) return;
+    switch (action) {
+      case 'copy':
+        await _copyMessages([message]);
+        break;
+      case 'quote':
+        _setQuote(message);
+        break;
+      case 'delete':
+        // 正在生成的消息删除即停止回复，无需确认
+        if (message.isStreaming) {
+          await _deleteMessages([message.id]);
+        } else {
+          await _confirmDeleteMessages([message.id]);
+        }
+        break;
+      case 'multiselect':
+        _enterSelectionMode(message.id);
+        break;
+    }
+  }
+
+  /// 用 Overlay 展示深色面板：优先气泡上方，空间不足放下方；
+  /// 水平跟随消息侧（用户靠右、角色靠左）并钳制在屏幕内。
+  Future<String?> _showMessageActionPanel(
+    BuildContext bubbleContext,
+    ChatMessage message,
+  ) {
+    final completer = Completer<String?>();
+    final overlayState = Overlay.of(bubbleContext);
+    final overlayBox =
+        overlayState.context.findRenderObject() as RenderBox;
+    final box = bubbleContext.findRenderObject() as RenderBox;
+    final bubbleTop =
+        box.localToGlobal(Offset.zero, ancestor: overlayBox).dy;
+    final bubbleHeight = box.size.height;
+    final overlayWidth = overlayBox.size.width;
+    final overlayHeight = overlayBox.size.height;
+
+    final isUser = message.role == 'user';
+    const margin = 12.0;
+    const gap = 8.0;
+    const itemWidth = 68.0;
+    const panelHeight = 62.0;
+    final canQuote =
+        !message.isStreaming && message.content.trim().isNotEmpty;
+    final itemCount = canQuote ? 4 : 3;
+    final panelWidth = itemCount * itemWidth + 16;
+
+    // 垂直：优先上方；顶部空间不足（含 AppBar 区域约 100px）则放下方
+    final showAbove = bubbleTop - panelHeight - gap >= 100;
+    final top = showAbove
+        ? bubbleTop - panelHeight - gap
+        : (bubbleTop + bubbleHeight + gap).clamp(
+            0.0,
+            overlayHeight - panelHeight - margin,
+          );
+
+    // 水平：用户消息面板靠右对齐，角色消息靠左对齐
+    final left = (isUser
+            ? overlayWidth - margin - panelWidth
+            : margin)
+        .clamp(margin, overlayWidth - panelWidth - margin);
+
+    late final OverlayEntry entry;
+    void close([String? action]) {
+      if (!completer.isCompleted) completer.complete(action);
+      if (entry.mounted) entry.remove();
+    }
+
+    entry = OverlayEntry(
+      builder: (ctx) => _MessageActionPanel(
+        rect: Rect.fromLTWH(left, top, panelWidth, panelHeight),
+        canQuote: canQuote,
+        onAction: (action) => close(action),
+        onDismiss: () => close(null),
+      ),
+    );
+    overlayState.insert(entry);
+    return completer.future;
+  }
   /// 群聊中从浮层选择候选角色
   void _selectCandidate(Persona p) {
     final text = _input.text;
@@ -602,7 +835,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             ListTile(
               leading: const Icon(Icons.cloud_outlined),
               title: const Text('当前模型'),
-              subtitle: Text(state.activeApi?.model ?? '未配置'),
+              subtitle: Text(state.activeModelName ?? '未配置'),
             ),
           ],
         ),
@@ -674,8 +907,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     // 群聊始终使用当前群名，单聊始终使用对方角色名
     final title = isGroup ? (group?.name ?? '群聊') : (persona?.name ?? '新对话');
     final subtitle = isGroup
-        ? '${(group?.personaIds.length ?? 0) + 1} 位成员 · ${state.activeApi?.model ?? '未配置'}'
-        : (state.activeApi?.model ?? '未配置');
+        ? '${(group?.personaIds.length ?? 0) + 1} 位成员 · ${state.activeModelName ?? '未配置'}'
+        : (state.activeModelName ?? '未配置');
     final markdownStyleSheet = MarkdownStyleSheet.fromTheme(Theme.of(context))
         .copyWith(
           p: TextStyle(color: scheme.onSurface, height: 1.5, fontSize: 15),
@@ -699,14 +932,37 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           ),
         );
 
+    final userMsgCountForSelection = messages
+        .where((m) => m.role == 'user' || m.role == 'assistant')
+        .length;
+
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded),
-          onPressed: () => Navigator.pop(context),
-        ),
+        leading: _selectionMode
+            ? IconButton(
+                icon: const Icon(Icons.close_rounded),
+                tooltip: '退出多选',
+                onPressed: _exitSelectionMode,
+              )
+            : IconButton(
+                icon: const Icon(Icons.arrow_back_rounded),
+                onPressed: () => Navigator.pop(context),
+              ),
         titleSpacing: 0,
-        title: GestureDetector(
+        title: _selectionMode
+            ? AnimatedSwitcher(
+                duration: const Duration(milliseconds: 160),
+                child: Text(
+                  '已选 ${_selectedIds.length} 条',
+                  key: const ValueKey('selection-title'),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              )
+            : GestureDetector(
           onTap: _showSessionInfo,
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
@@ -755,7 +1011,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             ),
           ),
         ),
-        actions: [
+        actions: _selectionMode
+            ? [
+                TextButton(
+                  onPressed: _toggleSelectAllVisible,
+                  child: Text(
+                    _selectedIds.length >= userMsgCountForSelection
+                        ? '取消全选'
+                        : '全选',
+                  ),
+                ),
+              ]
+            : [
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded),
             tooltip: '设置',
@@ -832,6 +1099,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                           canAnimateEntrance &&
                           (_pendingEntranceIds.contains(msg.id) ||
                               !_knownMessageIds.contains(msg.id));
+                      final canInteract =
+                          !_selectionMode &&
+                          (msg.role == 'user' || msg.role == 'assistant') &&
+                          (msg.content.trim().isNotEmpty ||
+                              msg.stickerId != null);
                       return RepaintBoundary(
                         key: ValueKey(msg.id),
                         child: Column(
@@ -853,8 +1125,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                               alignment: msg.role == 'user'
                                   ? Alignment.bottomRight
                                   : Alignment.bottomLeft,
-                              child: _MessageBlock(
+                              child: _MessageGestureShell(
                                 message: msg,
+                                enabled: canInteract,
+                                selectionMode: _selectionMode,
+                                selected: _selectedIds.contains(msg.id),
+                                onLongPress: (bubbleContext) =>
+                                    _showMessageMenu(bubbleContext, msg),
+                                onSelectionToggle: () =>
+                                    _toggleSelectMessage(msg),
+                                child: _MessageBlock(
+                                  message: msg,
                                 persona: persona,
                                 isGroup: isGroup,
                                 speaker: isGroup
@@ -870,6 +1151,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                     ? (speaker) => _insertMention(speaker)
                                     : null,
                               ),
+                              ),
                             ),
                           ],
                         ),
@@ -877,7 +1159,28 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                     },
                   ),
           ),
-          _InputArea(
+          if (_selectionMode)
+            _SelectionBottomBar(
+              count: _selectedIds.length,
+              allSelected: _selectedIds.length >= userMsgCountForSelection,
+              onToggleSelectAll: _toggleSelectAllVisible,
+              onExit: _exitSelectionMode,
+              onCopy: () async {
+                final selected = messages
+                    .where((m) => _selectedIds.contains(m.id))
+                    .toList();
+                await _copyMessages(selected);
+                _exitSelectionMode();
+              },
+              onDelete: () {
+                final ids = _selectedIds.toList();
+                _confirmDeleteMessages(ids);
+              },
+            )
+          else
+            _InputArea(
+            quote: _pendingQuote,
+            onCancelQuote: () => setState(() => _pendingQuote = null),
             controller: _input,
             focusNode: _focusNode,
             onSend: _send,
@@ -915,6 +1218,8 @@ class _InputArea extends StatelessWidget {
   final List<Persona> mentionCandidates;
   final String? mentionQuery;
   final ValueChanged<Persona> onSelectCandidate;
+  final MessageQuote? quote; // 待发送的引用预览
+  final VoidCallback? onCancelQuote;
 
   const _InputArea({
     required this.controller,
@@ -926,6 +1231,8 @@ class _InputArea extends StatelessWidget {
     required this.mentionCandidates,
     required this.mentionQuery,
     required this.onSelectCandidate,
+    this.quote,
+    this.onCancelQuote,
   });
 
   @override
@@ -935,6 +1242,7 @@ class _InputArea extends StatelessWidget {
     const hintText = '输入消息…';
     final showCandidates =
         isGroup && mentionQuery != null && mentionCandidates.isNotEmpty;
+    final pendingQuote = quote;
 
     return SafeArea(
       top: false,
@@ -944,6 +1252,72 @@ class _InputArea extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // 引用预览条（长按消息 → 引用）
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, 0.4),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: child,
+                ),
+              ),
+              child: pendingQuote == null
+                  ? const SizedBox.shrink(key: ValueKey('quote-none'))
+                  : Container(
+                      key: const ValueKey('quote-bar'),
+                      margin: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+                      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border(
+                          left: BorderSide(color: scheme.primary, width: 3),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '引用 ${pendingQuote.authorName}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: scheme.primary,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  pendingQuote.text,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            icon: Icon(
+                              Icons.close_rounded,
+                              size: 18,
+                              color: scheme.outline,
+                            ),
+                            onPressed: onCancelQuote,
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
             // 候选角色浮层（直接显隐，避免 AnimatedSize 不可打断）
             if (showCandidates)
               Container(
@@ -1269,6 +1643,8 @@ class _WelcomeGroupAvatar extends StatelessWidget {
 }
 
 /// 消息块
+/// "全选"文字级高亮已按需求移除（2026-09-23 六轮）：长按菜单不再附加
+/// 任何高亮效果，消息内容保持原样。
 class _MessageBlock extends StatelessWidget {
   final ChatMessage message;
   final Persona? persona;
@@ -1389,7 +1765,21 @@ class _MessageBlock extends StatelessWidget {
                     enabled: playEntrance,
                     loadingChild: const SizedBox.shrink(),
                     child: userBubble(
-                      SelectableText(message.content, style: userTextStyle),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (message.quote != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: _QuoteBlock(
+                                quote: message.quote!,
+                                onPrimary: true,
+                              ),
+                            ),
+                          Text(message.content, style: userTextStyle),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -1617,7 +2007,8 @@ class _RenderSpeedAnimatedSize extends RenderAligningShiftedBox {
   Duration _segmentStart = Duration.zero;
   Duration _segmentDuration = Duration.zero;
   Duration _elapsed = Duration.zero;
-  final LayerHandle<ClipRectLayer> _clipRectLayer = LayerHandle<ClipRectLayer>();
+  final LayerHandle<ClipRectLayer> _clipRectLayer =
+      LayerHandle<ClipRectLayer>();
 
   set enabled(bool value) {
     if (_enabled == value) return;
@@ -1660,8 +2051,15 @@ class _RenderSpeedAnimatedSize extends RenderAligningShiftedBox {
   void _beginSegment(Size from, Size target) {
     _fromSize = from;
     _targetSize = target;
-    final px = max((target.width - from.width).abs(), (target.height - from.height).abs());
-    _segmentDuration = _speedDuration(px, _kMinSizeMorphDuration, _kMaxSizeMorphDuration);
+    final px = max(
+      (target.width - from.width).abs(),
+      (target.height - from.height).abs(),
+    );
+    _segmentDuration = _speedDuration(
+      px,
+      _kMinSizeMorphDuration,
+      _kMaxSizeMorphDuration,
+    );
     _segmentStart = _ticker.isActive ? _elapsed : Duration.zero;
     if (!_ticker.isActive) _ticker.start();
     _animating = true;
@@ -2398,6 +2796,410 @@ class _UserAvatarSmall extends StatelessWidget {
         name.isEmpty ? '我' : name.characters.first,
         style: TextStyle(fontSize: 14, color: scheme.onSecondaryContainer),
       ),
+    );
+  }
+}
+
+/// 消息手势壳：长按按压缩放动效 + 多选模式的选中圈与点选切换。
+/// 不做整块内容的蒙层/描边；菜单打开期间的"全选"效果由
+/// [_MessageBlock] 以文字级高亮呈现。
+class _MessageGestureShell extends StatefulWidget {
+  final ChatMessage message;
+  final bool enabled; // 是否响应长按（空 loading 气泡不响应）
+  final bool selectionMode;
+  final bool selected;
+  final ValueChanged<BuildContext>? onLongPress;
+  final VoidCallback? onSelectionToggle;
+  final Widget child;
+
+  const _MessageGestureShell({
+    required this.message,
+    required this.enabled,
+    required this.selectionMode,
+    required this.selected,
+    required this.child,
+    this.onLongPress,
+    this.onSelectionToggle,
+  });
+
+  @override
+  State<_MessageGestureShell> createState() => _MessageGestureShellState();
+}
+
+class _MessageGestureShellState extends State<_MessageGestureShell> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final child = AnimatedScale(
+      scale: _pressed ? 0.96 : 1.0,
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOut,
+      child: widget.child,
+    );
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.selectionMode ? widget.onSelectionToggle : null,
+      onLongPressStart: widget.enabled
+          ? (_) => setState(() => _pressed = true)
+          : null,
+      onLongPress: widget.enabled
+          ? () {
+              HapticFeedback.mediumImpact();
+              widget.onLongPress?.call(context);
+            }
+          : null,
+      onLongPressEnd: (_) => setState(() => _pressed = false),
+      onLongPressCancel: () => setState(() => _pressed = false),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // 多选模式：行首出现选中圈（带淡入缩放）
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 160),
+            switchInCurve: Curves.easeOutBack,
+            transitionBuilder: (child, animation) => ScaleTransition(
+              scale: animation,
+              child: child,
+            ),
+            child: widget.selectionMode
+                ? Padding(
+                    key: ValueKey('tick-${widget.message.id}'),
+                    padding: const EdgeInsets.only(right: 10),
+                    child: _SelectTick(selected: widget.selected),
+                  )
+                : const SizedBox.shrink(key: ValueKey('tick-none')),
+          ),
+          Expanded(child: child),
+        ],
+      ),
+    );
+  }
+}
+
+/// 多选选中圈
+class _SelectTick extends StatelessWidget {
+  final bool selected;
+  const _SelectTick({required this.selected});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOutBack,
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: selected ? cs.primary : Colors.transparent,
+        border: Border.all(
+          color: selected ? cs.primary : cs.outline,
+          width: selected ? 0 : 1.5,
+        ),
+      ),
+      child: selected
+          ? Icon(Icons.check_rounded, size: 16, color: cs.onPrimary)
+          : null,
+    );
+  }
+}
+
+/// 多选模式底部操作栏：全选 / 复制 / 删除
+class _SelectionBottomBar extends StatelessWidget {
+  final int count;
+  final bool allSelected;
+  final VoidCallback onToggleSelectAll;
+  final VoidCallback onExit;
+  final Future<void> Function() onCopy;
+  final VoidCallback onDelete;
+
+  const _SelectionBottomBar({
+    required this.count,
+    required this.allSelected,
+    required this.onToggleSelectAll,
+    required this.onExit,
+    required this.onCopy,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final hasSelection = count > 0;
+    return SafeArea(
+      top: false,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        decoration: BoxDecoration(
+          color: cs.surface,
+          border: Border(
+            top: BorderSide(color: cs.outlineVariant, width: 0.5),
+          ),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Row(
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: onToggleSelectAll,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(
+                  children: [
+                    _SelectTick(selected: allSelected),
+                    const SizedBox(width: 10),
+                    Text(
+                      allSelected ? '取消全选' : '全选',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: cs.onSurface,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '已选 $count 条',
+              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(width: 12),
+            AnimatedOpacity(
+              opacity: hasSelection ? 1.0 : 0.4,
+              duration: const Duration(milliseconds: 160),
+              child: IgnorePointer(
+                ignoring: !hasSelection,
+                child: TextButton.icon(
+                  onPressed: onCopy,
+                  icon: const Icon(Icons.copy_rounded, size: 18),
+                  label: const Text('复制'),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            AnimatedOpacity(
+              opacity: hasSelection ? 1.0 : 0.4,
+              duration: const Duration(milliseconds: 160),
+              child: IgnorePointer(
+                ignoring: !hasSelection,
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: cs.error),
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: const Text('删除'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 气泡内的引用块（回复消息的快照展示）
+class _QuoteBlock extends StatelessWidget {
+  final MessageQuote quote;
+  final bool onPrimary; // 用户气泡（primary 底）上使用白色系配色
+
+  const _QuoteBlock({required this.quote, this.onPrimary = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bgColor = onPrimary
+        ? Colors.white.withValues(alpha: 0.18)
+        : cs.primaryContainer.withValues(alpha: 0.35);
+    final titleColor = onPrimary
+        ? Colors.white.withValues(alpha: 0.9)
+        : cs.primary;
+    final textColor = onPrimary
+        ? Colors.white.withValues(alpha: 0.85)
+        : cs.onSurfaceVariant;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(
+            color: onPrimary ? Colors.white70 : cs.primary,
+            width: 3,
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '引用 ${quote.authorName}',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: titleColor,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            quote.text,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, color: textColor, height: 1.3),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 长按悬浮菜单：浅色主题面板，一行"图标+文字"，fade+scale 出现，
+/// 点面板外关闭。删除项用 error 色区分，其余用主题色图标。
+class _MessageActionPanel extends StatefulWidget {
+  final Rect rect; // 面板在 overlay 坐标系中的位置
+  final bool canQuote; // 空内容/生成中的消息不显示引用
+  final ValueChanged<String> onAction;
+  final VoidCallback onDismiss;
+
+  const _MessageActionPanel({
+    required this.rect,
+    required this.canQuote,
+    required this.onAction,
+    required this.onDismiss,
+  });
+
+  @override
+  State<_MessageActionPanel> createState() => _MessageActionPanelState();
+}
+
+class _MessageActionPanelState extends State<_MessageActionPanel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 150),
+  );
+  late final Animation<double> _scale = Tween(
+    begin: 0.9,
+    end: 1.0,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  ({String value, IconData icon, String label}) _item(
+    String value,
+    IconData icon,
+    String label,
+  ) {
+    return (value: value, icon: icon, label: label);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final items = [
+      _item('copy', Icons.copy_rounded, '复制'),
+      if (widget.canQuote) _item('quote', Icons.format_quote_rounded, '引用'),
+      _item('delete', Icons.delete_outline_rounded, '删除'),
+      _item('multiselect', Icons.checklist_rounded, '多选'),
+    ];
+    return Stack(
+      children: [
+        // 全屏透明 barrier：点任意处关闭
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onDismiss,
+          ),
+        ),
+        Positioned(
+          left: widget.rect.left,
+          top: widget.rect.top,
+          child: FadeTransition(
+            opacity: _controller,
+            child: ScaleTransition(
+              scale: _scale,
+              alignment: Alignment.topCenter,
+              child: Material(
+                color: cs.surfaceContainerLow,
+                elevation: 12,
+                shadowColor: cs.shadow.withValues(alpha: 0.25),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: BorderSide(
+                    color: cs.outlineVariant.withValues(alpha: 0.6),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (var i = 0; i < items.length; i++) ...[
+                        if (i > 0)
+                          Container(
+                            width: 0.5,
+                            height: 30,
+                            color: cs.outlineVariant.withValues(alpha: 0.7),
+                          ),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(10),
+                          onTap: () => widget.onAction(items[i].value),
+                          child: SizedBox(
+                            width: 66,
+                            height: 46,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  items[i].icon,
+                                  size: 20,
+                                  color: items[i].value == 'delete'
+                                      ? cs.error
+                                      : cs.primary,
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  items[i].label,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.0,
+                                    color: items[i].value == 'delete'
+                                        ? cs.error
+                                        : cs.onSurface,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

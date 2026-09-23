@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
@@ -49,7 +49,7 @@ class StickerMessageBody extends StatelessWidget {
     if (matches.isEmpty) {
       return MarkdownBody(
         data: displayContent,
-        selectable: true,
+        selectable: false,
         styleSheet: styleSheet,
       );
     }
@@ -60,7 +60,7 @@ class StickerMessageBody extends StatelessWidget {
       final before = displayContent.substring(start, match.start);
       if (before.trim().isNotEmpty) {
         children.add(
-          MarkdownBody(data: before, selectable: true, styleSheet: styleSheet),
+          MarkdownBody(data: before, selectable: false, styleSheet: styleSheet),
         );
       }
       final name = match.group(1)!.trim();
@@ -94,7 +94,7 @@ class StickerMessageBody extends StatelessWidget {
     final after = displayContent.substring(start);
     if (after.trim().isNotEmpty) {
       children.add(
-        MarkdownBody(data: after, selectable: true, styleSheet: styleSheet),
+        MarkdownBody(data: after, selectable: false, styleSheet: styleSheet),
       );
     }
     return Column(

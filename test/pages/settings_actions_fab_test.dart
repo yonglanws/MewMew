@@ -10,19 +10,19 @@ import 'package:mewmew/state/app_state.dart';
 import 'package:mewmew/theme/app_theme.dart';
 
 void main() {
-  testWidgets('人格设定把创建角色移到右下角 FAB', (tester) async {
+  testWidgets('角色卡把创建角色卡移到右下角 FAB', (tester) async {
     final state = AppState(StorageService());
     addTearDown(state.dispose);
 
     await tester.pumpWidget(_host(state, const PersonaPage()));
 
-    expect(find.byTooltip('创建角色'), findsNothing);
-    expect(find.text('创建角色'), findsOneWidget);
+    expect(find.byTooltip('创建角色卡'), findsNothing);
+    expect(find.text('创建角色卡'), findsOneWidget);
     expect(find.byType(FloatingActionButton), findsOneWidget);
     expect(find.byType(FilledButton), findsNothing);
   });
 
-  testWidgets('创建人格页面把保存移到右下角 FAB', (tester) async {
+  testWidgets('创建角色卡页面把保存移到右下角 FAB', (tester) async {
     final state = AppState(StorageService());
     addTearDown(state.dispose);
 
@@ -31,6 +31,33 @@ void main() {
     expect(find.byType(FloatingActionButton), findsOneWidget);
     expect(find.text('保存'), findsOneWidget);
     expect(find.byType(FilledButton), findsNothing);
+  });
+
+  testWidgets('角色卡提示词模板弹层：占位符芯片点按插入', (tester) async {
+    final state = AppState(StorageService());
+    addTearDown(state.dispose);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+
+    await tester.pumpWidget(_host(state, const PersonaEditorPage()));
+
+    // 打开提示词模板弹层
+    await tester.tap(find.text('提示词模板'));
+    await tester.pumpAndSettle();
+
+    // 芯片展示中文名 + token 徽标，不再是裸文本说明
+    expect(find.text('外貌'), findsOneWidget);
+    expect(find.text('{appearance}'), findsOneWidget);
+    expect(find.textContaining('占位符：{name}'), findsNothing);
+
+    // 点「外貌」芯片 → {appearance} 插入到光标处
+    await tester.enterText(find.byType(TextField).last, '她是');
+    await tester.tap(find.text('外貌'));
+    await tester.pumpAndSettle();
+    final controller = tester.widget<TextField>(
+      find.byType(TextField).last,
+    ).controller!;
+    expect(controller.text, '她是{appearance}');
   });
 
   testWidgets('表情包组详情把右上角操作移到右下角操作面板', (tester) async {

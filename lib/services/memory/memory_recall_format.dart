@@ -34,8 +34,7 @@ String formatMemoriesForInjection({
 
     if (atomPolicyEnabled && atoms.isNotEmpty) {
       final live = atoms
-          .where((a) =>
-              a.status == AtomStatus.active && !a.isExpired(current))
+          .where((a) => a.status == AtomStatus.active && !a.isExpired(current))
           .map((a) => a.content)
           .toSet()
           .toList();
@@ -59,7 +58,8 @@ String formatMemoriesForInjection({
       if (m.participants.isNotEmpty) {
         metaParts.add('参与者: ${m.participants.join('、')}');
       }
-      if (m.keyFacts.isNotEmpty) metaParts.add('关键事实: ${m.keyFacts.join('; ')}');
+      if (m.keyFacts.isNotEmpty)
+        metaParts.add('关键事实: ${m.keyFacts.join('; ')}');
       if (m.sourceTimeLabel != null && m.sourceTimeLabel!.isNotEmpty) {
         metaParts.add('来源时间: ${m.sourceTimeLabel}');
       }
@@ -93,8 +93,7 @@ bool stripInjectedMemories(List<Map<String, dynamic>> apiMessages) {
     if (msg['role'] != 'user') continue;
     final content = msg['content'];
     if (content is! String) continue;
-    if (!content.contains(injectionOpenTag) &&
-        !content.contains('【长期记忆】')) {
+    if (!content.contains(injectionOpenTag) && !content.contains('【长期记忆】')) {
       continue;
     }
     var cleaned = content.replaceAll(_ragBlockPattern, '');

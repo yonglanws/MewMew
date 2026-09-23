@@ -31,8 +31,10 @@ class AppDrawer extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 onTap: () {
                   Navigator.pop(context);
-                  Navigator.push(context,
-                      FastRoute(builder: (_) => const UserProfilePage()));
+                  Navigator.push(
+                    context,
+                    FastRoute(builder: (_) => const UserProfilePage()),
+                  );
                 },
                 child: Row(
                   children: [
@@ -44,24 +46,23 @@ class AppDrawer extends StatelessWidget {
                         children: [
                           Text(
                             user.name,
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
+                            style: Theme.of(context).textTheme.titleMedium
                                 ?.copyWith(fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             '点击编辑资料',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
+                            style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(color: scheme.onSurfaceVariant),
                           ),
                         ],
                       ),
                     ),
-                    Icon(Icons.edit_outlined,
-                        size: 18, color: scheme.onSurfaceVariant),
+                    Icon(
+                      Icons.edit_outlined,
+                      size: 18,
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ],
                 ),
               ),
@@ -81,9 +82,9 @@ class AppDrawer extends StatelessWidget {
                     onTap: () {
                       Navigator.pop(context);
                       Navigator.push(
-                          context,
-                          FastRoute(
-                              builder: (_) => const DashboardPage()));
+                        context,
+                        FastRoute(builder: (_) => const DashboardPage()),
+                      );
                     },
                   ),
                   _DrawerItem(
@@ -93,9 +94,9 @@ class AppDrawer extends StatelessWidget {
                     onTap: () {
                       Navigator.pop(context);
                       Navigator.push(
-                          context,
-                          FastRoute(
-                              builder: (_) => const LogsPage()));
+                        context,
+                        FastRoute(builder: (_) => const LogsPage()),
+                      );
                     },
                   ),
                   _DrawerItem(
@@ -105,9 +106,9 @@ class AppDrawer extends StatelessWidget {
                     onTap: () {
                       Navigator.pop(context);
                       Navigator.push(
-                          context,
-                          FastRoute(
-                              builder: (_) => const SettingsPage()));
+                        context,
+                        FastRoute(builder: (_) => const SettingsPage()),
+                      );
                     },
                   ),
                 ],
@@ -140,7 +141,11 @@ class _UserAvatar extends StatelessWidget {
     return CircleAvatar(
       radius: radius,
       backgroundColor: scheme.secondaryContainer,
-      child: Icon(Icons.person, size: radius, color: scheme.onSecondaryContainer),
+      child: Icon(
+        Icons.person,
+        size: radius,
+        color: scheme.onSecondaryContainer,
+      ),
     );
   }
 }
@@ -175,8 +180,11 @@ class _DrawerItem extends StatelessWidget {
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
             ),
             const Spacer(),
-            Icon(Icons.chevron_right_rounded,
-                size: 20, color: Theme.of(context).colorScheme.outline),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: Theme.of(context).colorScheme.outline,
+            ),
           ],
         ),
       ),

@@ -8,16 +8,15 @@ MemoryEntry _entry(
   double importance = 0.3,
   DateTime? createdAt,
   List<double>? embedding,
-}) =>
-    MemoryEntry(
-      id: id,
-      content: '记忆$id',
-      createdAt: createdAt ?? DateTime(2025, 9, 1),
-      source: 'summary',
-      sessionId: sessionId,
-      importance: importance,
-      embedding: embedding,
-    );
+}) => MemoryEntry(
+  id: id,
+  content: '记忆$id',
+  createdAt: createdAt ?? DateTime(2025, 9, 1),
+  source: 'summary',
+  sessionId: sessionId,
+  importance: importance,
+  embedding: embedding,
+);
 
 void main() {
   final now = DateTime(2025, 11, 20);

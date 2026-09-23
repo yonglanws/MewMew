@@ -52,8 +52,7 @@ class MemorySettingsPage extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: cs.tertiaryContainer.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(14),
-                  border:
-                      Border.all(color: cs.tertiary.withValues(alpha: 0.4)),
+                  border: Border.all(color: cs.tertiary.withValues(alpha: 0.4)),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -69,7 +68,7 @@ class MemorySettingsPage extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '未配置嵌入 API（可选）',
+                            '未配置嵌入 API',
                             style: TextStyle(
                               fontWeight: FontWeight.w700,
                               color: cs.onTertiaryContainer,
@@ -345,9 +344,10 @@ class MemorySettingsPage extends StatelessWidget {
                     onChanged: memoryDisabled
                         ? null
                         : (v) => context.read<AppState>().updateMemorySettings(
-                              state.memorySettings
-                                  .copyWith(consolidationEnabled: v),
+                            state.memorySettings.copyWith(
+                              consolidationEnabled: v,
                             ),
+                          ),
                   ),
                 ),
                 _SettingTile(
@@ -355,19 +355,22 @@ class MemorySettingsPage extends StatelessWidget {
                   iconColor: cs.secondary,
                   title: '立即整理',
                   subtitle: '手动触发一轮整理合并（不受冷却限制）',
-                  onTap: memoryDisabled ||
+                  onTap:
+                      memoryDisabled ||
                           !state.memorySettings.consolidationEnabled
                       ? null
                       : () async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        messenger.showSnackBar(
-                          const SnackBar(content: Text('整理进行中…')),
-                        );
-                        await context.read<AppState>().runConsolidationManually();
-                        messenger.showSnackBar(
-                          const SnackBar(content: Text('整理完成')),
-                        );
-                      },
+                          final messenger = ScaffoldMessenger.of(context);
+                          messenger.showSnackBar(
+                            const SnackBar(content: Text('整理进行中…')),
+                          );
+                          await context
+                              .read<AppState>()
+                              .runConsolidationManually();
+                          messenger.showSnackBar(
+                            const SnackBar(content: Text('整理完成')),
+                          );
+                        },
                 ),
               ],
             ),
@@ -385,12 +388,12 @@ class MemorySettingsPage extends StatelessWidget {
                   onTap: memoryDisabled
                       ? null
                       : () async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        await context.read<AppState>().runMemoryMaintenance();
-                        messenger.showSnackBar(
-                          const SnackBar(content: Text('记忆维护完成')),
-                        );
-                      },
+                          final messenger = ScaffoldMessenger.of(context);
+                          await context.read<AppState>().runMemoryMaintenance();
+                          messenger.showSnackBar(
+                            const SnackBar(content: Text('记忆维护完成')),
+                          );
+                        },
                 ),
                 _SettingTile(
                   icon: Icons.ios_share_outlined,
@@ -495,20 +498,26 @@ class MemorySettingsPage extends StatelessWidget {
     final state = context.read<AppState>();
     final modelSources = <String, Set<String>>{};
     for (final api in state.apiConfigs) {
-      final model = api.model.trim();
-      if (model.isEmpty) continue;
-      (modelSources[model] ??= {}).add(api.name);
+      // 供应商-模型两级：列出每个供应商下的全部模型档位
+      final models = api.models.isNotEmpty
+          ? api.models.map((m) => m.model)
+          : [if (api.model.trim().isNotEmpty) api.model];
+      for (final model in models) {
+        if (model.trim().isEmpty) continue;
+        (modelSources[model] ??= {}).add(api.name);
+      }
     }
     if (modelSources.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先在 API 配置中添加至少一个模型')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请先在 API 配置中添加至少一个模型')));
       return;
     }
-    final entries = modelSources.entries
-        .map((e) => (model: e.key, sources: e.value.toList()..sort()))
-        .toList()
-      ..sort((a, b) => a.model.compareTo(b.model));
+    final entries =
+        modelSources.entries
+            .map((e) => (model: e.key, sources: e.value.toList()..sort()))
+            .toList()
+          ..sort((a, b) => a.model.compareTo(b.model));
 
     showModalBottomSheet<void>(
       context: context,
@@ -534,21 +543,9 @@ class MemorySettingsPage extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             for (final option in const [
-              (
-                'session',
-                '会话隔离',
-                '每个会话拥有独立的记忆空间',
-              ),
-              (
-                'persona',
-                '人物隔离',
-                '同一人物的不同会话共用记忆，人物之间互不混用',
-              ),
-              (
-                'global',
-                '全局共享',
-                '所有会话共用同一个记忆池',
-              ),
+              ('session', '会话隔离', '每个会话拥有独立的记忆空间'),
+              ('persona', '人物隔离', '同一人物的不同会话共用记忆，人物之间互不混用'),
+              ('global', '全局共享', '所有会话共用同一个记忆池'),
             ])
               RadioListTile<String>(
                 value: option.$1,
@@ -748,10 +745,12 @@ class _ModelPickerSheetState extends State<_ModelPickerSheet> {
     final filtered = _query.isEmpty
         ? widget.entries
         : widget.entries
-            .where((e) =>
-                e.model.toLowerCase().contains(_query) ||
-                e.sources.any((s) => s.toLowerCase().contains(_query)))
-            .toList();
+              .where(
+                (e) =>
+                    e.model.toLowerCase().contains(_query) ||
+                    e.sources.any((s) => s.toLowerCase().contains(_query)),
+              )
+              .toList();
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -944,7 +943,7 @@ class _EmbeddingApiSheetState extends State<_EmbeddingApiSheet> {
       _testDetail = null;
     });
     debugPrint('[嵌入测试] 开始测试: baseUrl=$baseUrl, model=$model');
-    log.i('memory', '嵌入 API 测试开始：baseUrl=$baseUrl, model=$model');
+    Log.i('memory', '嵌入 API 测试开始：baseUrl=$baseUrl, model=$model');
     try {
       final start = DateTime.now();
       final result = await AiService.getEmbedding(
@@ -955,7 +954,7 @@ class _EmbeddingApiSheetState extends State<_EmbeddingApiSheet> {
       ).timeout(const Duration(seconds: 30));
       final elapsed = DateTime.now().difference(start).inMilliseconds;
       debugPrint('[嵌入测试] 成功: ${elapsed}ms, dim=${result.embedding.length}');
-      log.i('memory', '嵌入 API 测试成功：${elapsed}ms 维度=${result.embedding.length}');
+      Log.i('memory', '嵌入 API 测试成功：${elapsed}ms 维度=${result.embedding.length}');
       if (!mounted) return;
       setState(() {
         _testSuccess = true;
@@ -966,7 +965,7 @@ class _EmbeddingApiSheetState extends State<_EmbeddingApiSheet> {
       _scrollToResult();
     } catch (e) {
       debugPrint('[嵌入测试] 失败: $e');
-      log.e('memory', '嵌入 API 测试失败', error: e);
+      Log.e('memory', '嵌入 API 测试失败', error: e);
       if (!mounted) return;
       setState(() {
         _testSuccess = false;

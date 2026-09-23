@@ -9,16 +9,15 @@ MemoryEntry _entry({
   DateTime? lastAccessTime,
   String status = 'active',
   DateTime? createdAt,
-}) =>
-    MemoryEntry(
-      id: id,
-      content: '内容$id',
-      createdAt: createdAt ?? DateTime(2025, 10, 1),
-      importance: importance,
-      accessCount: accessCount,
-      lastAccessTime: lastAccessTime,
-      status: status,
-    );
+}) => MemoryEntry(
+  id: id,
+  content: '内容$id',
+  createdAt: createdAt ?? DateTime(2025, 10, 1),
+  importance: importance,
+  accessCount: accessCount,
+  lastAccessTime: lastAccessTime,
+  status: status,
+);
 
 final now = DateTime(2025, 11, 20);
 
@@ -27,7 +26,6 @@ void main() {
 }
 
 void runTests(DateTime now) {
-
   group('每日衰减（applyDailyDecay）', () {
     test('常规衰减：importance 乘以 (1-rate)^days', () {
       final m = _entry(id: 'a', importance: 1.0 - 0.01);
@@ -149,12 +147,8 @@ void runTests(DateTime now) {
   });
 
   group('原子清扫（三段生命周期）', () {
-    AtomSweepReport sweep(List<MemoryAtom> atoms) => sweepAtoms(
-          atoms,
-          forgetDelayDays: 7,
-          purgeDelayDays: 30,
-          now: now,
-        );
+    AtomSweepReport sweep(List<MemoryAtom> atoms) =>
+        sweepAtoms(atoms, forgetDelayDays: 7, purgeDelayDays: 30, now: now);
 
     test('active → expired（过期）', () {
       final atom = _expiredAtom(1); // 过期 1 天
@@ -190,11 +184,26 @@ void runTests(DateTime now) {
 
   group('清理候选与归档', () {
     test('满足年龄与重要性条件的记忆入选', () {
-      final old = _entry(id: 'old', importance: 0.2, createdAt: DateTime(2025, 9, 1));
-      final young = _entry(id: 'young', importance: 0.2, createdAt: DateTime(2025, 11, 19));
-      final important = _entry(id: 'imp', importance: 0.9, createdAt: DateTime(2025, 9, 1));
-      final merged = _entry(id: 'merged', importance: 0.2, createdAt: DateTime(2025, 9, 1))
-        ..consolidatedFrom = ['x'];
+      final old = _entry(
+        id: 'old',
+        importance: 0.2,
+        createdAt: DateTime(2025, 9, 1),
+      );
+      final young = _entry(
+        id: 'young',
+        importance: 0.2,
+        createdAt: DateTime(2025, 11, 19),
+      );
+      final important = _entry(
+        id: 'imp',
+        importance: 0.9,
+        createdAt: DateTime(2025, 9, 1),
+      );
+      final merged = _entry(
+        id: 'merged',
+        importance: 0.2,
+        createdAt: DateTime(2025, 9, 1),
+      )..consolidatedFrom = ['x'];
       final candidates = findCleanupCandidates(
         [old, young, important, merged],
         daysThreshold: 30,
@@ -249,8 +258,8 @@ MemoryAtom _expiredAtom(int daysAgo) {
 }
 
 MemoryAtom _atomWithParent(String id, String parentId) => MemoryAtom(
-      id: id,
-      parentMemoryId: parentId,
-      content: '内容$id',
-      createdAt: DateTime(2025, 11, 1),
-    );
+  id: id,
+  parentMemoryId: parentId,
+  content: '内容$id',
+  createdAt: DateTime(2025, 11, 1),
+);

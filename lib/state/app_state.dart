@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 
 import '../models/models.dart';
 import '../services/ai_service.dart';
+import '../services/character_prompt.dart';
 import '../services/logger_service.dart';
 import '../services/memory/atom_classifier.dart';
 import '../services/memory/consolidation.dart';
@@ -127,21 +128,23 @@ String buildStickerPromptSection({
 /// 后台 LLM 任务（记忆提取/整理合并）执行器；生产走 [AiService.runTask]，
 /// 测试注入以模拟模型输出。
 @visibleForTesting
-typedef MemoryTaskRunner = Future<(String, int, int)> Function({
-  required ApiConfig config,
-  required String system,
-  required String user,
-  String? model,
-});
+typedef MemoryTaskRunner =
+    Future<(String, int, int)> Function({
+      required ApiConfig config,
+      required String system,
+      required String user,
+      String? model,
+    });
 
 /// 嵌入向量请求执行器；生产走 [AiService.getEmbedding]，测试注入假向量。
 @visibleForTesting
-typedef MemoryEmbedder = Future<EmbeddingResult> Function({
-  required String baseUrl,
-  required String apiKey,
-  required String model,
-  required String text,
-});
+typedef MemoryEmbedder =
+    Future<EmbeddingResult> Function({
+      required String baseUrl,
+      required String apiKey,
+      required String model,
+      required String text,
+    });
 
 /// 全局应用状态
 class AppState extends ChangeNotifier with WidgetsBindingObserver {
@@ -219,7 +222,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   /// 打断当前生成
   void stopGeneration() {
-    log.i('chat', '请求停止生成（取消回复循环）');
+    Log.i('chat', '请求停止生成（取消回复循环）');
     _cancelToken?.cancel();
     _pendingReplies.clear();
     _pendingMergedSessionId = null;
@@ -300,7 +303,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           await _storage.saveMemoryGraph(graphStore.toJson());
         })
         .catchError((Object error) {
-          log.e('storage', '保存记忆辅助数据失败', error: error);
+          Log.e('storage', '保存记忆辅助数据失败', error: error);
         });
   }
 
@@ -326,7 +329,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         .catchError((_) {})
         .then((_) => _storage.saveSessions(sessions))
         .catchError((Object error) {
-          log.e('storage', '保存会话失败', error: error);
+          Log.e('storage', '保存会话失败', error: error);
         });
   }
 
@@ -346,7 +349,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         .catchError((_) {})
         .then((_) => _storage.saveMemories(memories))
         .catchError((Object error) {
-          log.e('storage', '保存记忆失败', error: error);
+          Log.e('storage', '保存记忆失败', error: error);
         });
   }
 
@@ -372,7 +375,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         _storage.saveTokenDailyRecords(tokenUsage.dailyRecords),
       ]);
     } catch (error, stackTrace) {
-      log.e('storage', '保存 Token 统计失败', error: error, stackTrace: stackTrace);
+      Log.e('storage', '保存 Token 统计失败', error: error, stackTrace: stackTrace);
     }
   }
 
@@ -387,6 +390,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
   // 流式输出（默认开启；与对话分段发送互斥，关闭流式后才能启用分段发送）
   AssistantOutputMode assistantOutputMode = AssistantOutputMode.streaming;
+
+  // ---------- 提示词工程（设置-提示词） ----------
+  /// 提示词注入：上下文感知 + 私聊/群聊风格注入 + 模式注入（@Depth）
+  PromptInjectionSettings promptInjectionSettings = PromptInjectionSettings();
+
+  /// 世界书：关键词触发的背景设定注入
+  WorldBookSettings worldBookSettings = WorldBookSettings();
+
+  /// 生成文本风格参数合集：创意度 + 回复长度
+  GenerationStyleSettings generationStyleSettings = GenerationStyleSettings();
 
   bool get streamOutputEnabled =>
       assistantOutputMode == AssistantOutputMode.streaming;
@@ -827,7 +840,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       if (isSending && _pendingMergedSessionId != null) return;
       return;
     }
-    log.d('chat', '用户正在打字，重置防抖倒计时');
+    Log.d('chat', '用户正在打字，重置防抖倒计时');
     _mergeTimer?.cancel();
     final session = sessions.where((s) => s.id == sid).firstOrNull;
     final api = activeApi;
@@ -854,7 +867,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// 暂时暂停打字防抖倒计时（当用户输入框非空时）
   void pauseMergeTimerForTyping() {
     if (!typingDebounceEnabled || _mergeSessionId == null) return;
-    log.d('chat', '用户输入框非空，暂停防抖倒计时');
+    Log.d('chat', '用户输入框非空，暂停防抖倒计时');
     _mergeTimer?.cancel();
     _mergeTimer = null;
     notifyListeners();
@@ -863,7 +876,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   /// 恢复打字防抖倒计时（当用户停止打字/清空/离开页面时）
   void resumeMergeTimerForTyping() {
     if (_mergeSessionId == null || _mergeTimer != null) return;
-    log.d('chat', '用户停止打字或离开页面，恢复防抖倒计时');
+    Log.d('chat', '用户停止打字或离开页面，恢复防抖倒计时');
     final sid = _mergeSessionId;
     if (sid == null) return;
     final session = sessions.where((s) => s.id == sid).firstOrNull;
@@ -891,6 +904,24 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> updateMemorySettings(MemorySettings settings) async {
     memorySettings = settings;
     await _storage.saveMemorySettings(settings);
+    notifyListeners();
+  }
+
+  Future<void> updatePromptInjectionSettings(PromptInjectionSettings s) async {
+    promptInjectionSettings = s;
+    await _storage.savePromptInjectionSettings(s);
+    notifyListeners();
+  }
+
+  Future<void> updateWorldBookSettings(WorldBookSettings s) async {
+    worldBookSettings = s;
+    await _storage.saveWorldBookSettings(s);
+    notifyListeners();
+  }
+
+  Future<void> updateGenerationStyleSettings(GenerationStyleSettings s) async {
+    generationStyleSettings = s;
+    await _storage.saveGenerationStyleSettings(s);
     notifyListeners();
   }
 
@@ -945,7 +976,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> recordAppLaunch() async {
     appLaunchCount++;
     await _storage.setAppLaunchCount(appLaunchCount);
-    log.i('app', '应用启动（第 $appLaunchCount 次）');
+    Log.i('app', '应用启动（第 $appLaunchCount 次）');
     notifyListeners();
   }
 
@@ -974,10 +1005,33 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> debugCheckAndSummarize(ChatSession session) =>
       _checkAndSummarize(session);
 
+  /// 测试钩子：暴露系统提示词组装结果（含记忆工具/表情包协议块）
+  @visibleForTesting
+  String debugBuildSystemPrompt(
+    ChatSession session, {
+    Persona? speaker,
+    List<String> mentions = const [],
+  }) {
+    final isGroup = session.isGroup;
+    return _buildSystemPrompt(
+      isGroup: isGroup,
+      group: isGroup ? groupOf(session) : null,
+      persona: isGroup ? null : personaOf(session),
+      speaker: speaker,
+      mentions: mentions,
+      recentMessageTexts: session.messages
+          .where((m) => m.role != 'tool')
+          .map((m) => stripStickerInternalMarkers(m.content))
+          .where((s) => s.trim().isNotEmpty)
+          .toList(),
+    );
+  }
+
   Future<void> _checkAndSummarize(ChatSession session) async {
     // 状态钳位先行：即使无 API / 未开启自动总结，也保证游标与消息数一致
-    final eligible0 =
-        session.messages.where(_isExtractionEligible).toList(growable: false);
+    final eligible0 = session.messages
+        .where(_isExtractionEligible)
+        .toList(growable: false);
     final state0 = memoryReflectionState[session.id];
     if (state0 != null) {
       final idx = (state0['lastSummarizedIndex'] as num?)?.toInt() ?? 0;
@@ -989,13 +1043,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
     if (!memorySettings.autoSummaryEnabled) return;
     if (_summariesInFlight.contains(session.id)) return;
-    if (activeApi == null) return; // 提取需要对话 LLM（嵌入不再是硬门槛）
+    // 提取需要对话 LLM（嵌入不再是硬门槛）；供应商未选模型同样跳过
+    if (activeModelName == null) return;
 
     final eligible = eligible0;
     final total = eligible.length;
 
-    final state =
-        memoryReflectionState.putIfAbsent(session.id, () => {});
+    final state = memoryReflectionState.putIfAbsent(session.id, () => {});
     var lastIndex = (state['lastSummarizedIndex'] as num?)?.toInt() ?? 0;
     state['lastSummarizedIndex'] = lastIndex;
 
@@ -1013,7 +1067,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           ..remove('pending')
           ..['lastSummarizedIndex'] = total;
         _scheduleMemoryAuxPersist();
-        log.w('memory', '总结区间连续失败 3 次，放弃重试');
+        Log.w('memory', '总结区间连续失败 3 次，放弃重试');
         return;
       }
       start = (pending['startIndex'] as num?)?.toInt() ?? lastIndex;
@@ -1021,9 +1075,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final end = total;
     if (end - start < 2) return;
 
-    log.i(
+    Log.i(
       'memory',
-      '触发记忆提取：会话=${session.id.substring(0, 8)} '
+      '触发记忆提取：会话=${session.id.length > 8 ? session.id.substring(0, 8) : session.id} '
           '窗口=[$start, $end) 重试=$retry '
           '阈值=${memorySettings.summaryThreshold}',
     );
@@ -1056,7 +1110,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
     try {
       // 1. 格式化为提取输入
-      final botName = isGroup ? (groupOf(session)?.name ?? '群聊') : (persona?.name ?? 'AI');
+      final botName = isGroup
+          ? (groupOf(session)?.name ?? '群聊')
+          : (persona?.name ?? 'AI');
       final extractionMessages = window.map((m) {
         if (m.role == 'assistant') {
           final sp = m.speakerId != null ? personaById(m.speakerId) : null;
@@ -1090,7 +1146,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         config: api,
         system: buildExtractionSystemPrompt(
           currentDate: currentDate,
-          personaPrompt: persona?.buildSystemPrompt(),
+          personaPrompt: persona != null
+              ? CharacterPrompt.buildCharacterPrompt(persona)
+              : null,
         ),
         user: buildExtractionUserPrompt(
           conversationText: conversationText,
@@ -1101,10 +1159,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
             ? memorySettings.summaryModel
             : null,
       );
-      await addTokenUsage(
-        inputTokens: inputTokens,
-        outputTokens: outputTokens,
-      );
+      await addTokenUsage(inputTokens: inputTokens, outputTokens: outputTokens);
 
       final extraction = parseExtractionResponse(raw, isGroup: isGroup);
 
@@ -1149,14 +1204,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           personaId: memory.personaId,
         );
         memoryAtoms.addAll(atoms);
-        memory.atomTypes = atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+        memory.atomTypes = atoms.map((a) => a.atomType.name).toSet().toList()
+          ..sort();
       }
 
       memories.insert(0, memory);
       notifyListeners();
       _scheduleMemoriesPersist();
 
-      log.i(
+      Log.i(
         'memory',
         '已生成记忆：重要性=${extraction.importance} 质量=${extraction.quality} '
             '事实=${extraction.keyFacts.length} 原子=${atoms.length}',
@@ -1174,8 +1230,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       // 7. 推进游标
-      final state =
-          memoryReflectionState.putIfAbsent(session.id, () => {});
+      final state = memoryReflectionState.putIfAbsent(session.id, () => {});
       state
         ..remove('pending')
         ..['lastSummarizedIndex'] = endIndex;
@@ -1185,15 +1240,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _maybeRunConsolidation(trigger: 'reflection');
     } catch (e, s) {
       // 记录失败区间，下次重试
-      final state =
-          memoryReflectionState.putIfAbsent(session.id, () => {});
+      final state = memoryReflectionState.putIfAbsent(session.id, () => {});
       state['pending'] = {
         'startIndex': startIndex,
         'endIndex': endIndex,
         'retryCount': retryCount + 1,
       };
       _scheduleMemoryAuxPersist();
-      log.e('memory', '记忆提取失败（已记录待重试区间）', error: e, stackTrace: s);
+      Log.e('memory', '记忆提取失败（已记录待重试区间）', error: e, stackTrace: s);
     }
   }
 
@@ -1218,7 +1272,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         now: now,
       );
       if (report.processedCount > 0) {
-        log.i(
+        Log.i(
           'memory',
           '每日衰减完成：处理 ${report.processedCount} 条'
               '（间隔自 $lastRun）',
@@ -1236,8 +1290,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         purgeDelayDays: memorySettings.atomPurgeDelayDays,
         now: now,
       );
-      if (report.expiredCount + report.forgottenCount + report.purgedCount > 0) {
-        log.i(
+      if (report.expiredCount + report.forgottenCount + report.purgedCount >
+          0) {
+        Log.i(
           'memory',
           '原子清扫：过期 ${report.expiredCount}、'
               '遗忘 ${report.forgottenCount}、'
@@ -1259,14 +1314,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         if (memorySettings.autoArchiveEnabled) {
           for (final m in candidates) {
             archiveMemory(m, now: now);
-            log.d('memory', '归档过期记忆：${m.id.substring(0, 8)}');
+            Log.d('memory', '归档过期记忆：${m.id.length > 8 ? m.id.substring(0, 8) : m.id}');
           }
-          log.i('memory', '清理完成：归档 ${candidates.length} 条旧记忆');
+          Log.i('memory', '清理完成：归档 ${candidates.length} 条旧记忆');
         } else {
           for (final m in candidates) {
             _removeMemoryInternal(m.id);
           }
-          log.i('memory', '清理完成：删除 ${candidates.length} 条旧记忆');
+          Log.i('memory', '清理完成：删除 ${candidates.length} 条旧记忆');
         }
         changed = true;
       }
@@ -1305,8 +1360,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       final config = ConsolidationConfig.fromSettings(memorySettings);
       final candidates = findConsolidationCandidates(memories, config: config);
       if (candidates.isEmpty) return;
-      final groups =
-          buildConsolidationGroups(candidates, config: config);
+      final groups = buildConsolidationGroups(candidates, config: config);
       if (groups.isEmpty) return;
 
       var mergedCount = 0;
@@ -1321,13 +1375,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
                 ? memorySettings.summaryModel
                 : null,
           );
-          await addTokenUsage(
-            inputTokens: inTokens,
-            outputTokens: outTokens,
-          );
+          await addTokenUsage(inputTokens: inTokens, outputTokens: outTokens);
           final merged = parseMergeResponse(raw);
           if (merged == null) {
-            log.w('memory', '整理合并输出解析失败，跳过该组');
+            Log.w('memory', '整理合并输出解析失败，跳过该组');
             continue;
           }
 
@@ -1382,14 +1433,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           }
           mergedCount++;
         } catch (e) {
-          log.w('memory', '整理合并一组失败', error: e);
+          Log.w('memory', '整理合并一组失败', error: e);
         }
       }
 
       if (mergedCount > 0) {
-        memoryMaintenanceState['lastConsolidationAt'] =
-            DateTime.now().toIso8601String();
-        log.i('memory', '整理合并完成：合并 $mergedCount 组');
+        memoryMaintenanceState['lastConsolidationAt'] = DateTime.now()
+            .toIso8601String();
+        Log.i('memory', '整理合并完成：合并 $mergedCount 组');
         notifyListeners();
         _scheduleMemoriesPersist();
         _scheduleMemoryAuxPersist();
@@ -1424,16 +1475,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         queryEmbedding = result.embedding;
         await addTokenUsage(inputTokens: result.inputTokens);
       } catch (e) {
-        log.w('memory', '查询嵌入失败，本次退化为关键词检索', error: e);
+        Log.w('memory', '查询嵌入失败，本次退化为关键词检索', error: e);
       }
     }
 
     final atomIndex = _atomIndexByMemory();
     final candidates = memories
-        .map((m) => RetrievalMemory(
-              entry: m,
-              atoms: atomIndex[m.id] ?? const [],
-            ))
+        .map(
+          (m) => RetrievalMemory(entry: m, atoms: atomIndex[m.id] ?? const []),
+        )
         .toList();
 
     final results = await searchMemories(
@@ -1446,7 +1496,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     );
 
     if (results.isEmpty) {
-      log.d('memory', '混合检索无命中：候选=${candidates.length}');
+      Log.d('memory', '混合检索无命中：候选=${candidates.length}');
       return const [];
     }
 
@@ -1460,7 +1510,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     _scheduleMemoriesPersist();
     _scheduleMemoryAuxPersist();
-    log.d(
+    Log.d(
       'memory',
       '混合检索命中：候选=${candidates.length} '
           '返回=${results.length} '
@@ -1495,8 +1545,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     String queryText,
     String? personaId,
     String sessionId,
-  ) =>
-      _retrieveRelevantMemories(queryText, personaId, sessionId);
+  ) => _retrieveRelevantMemories(queryText, personaId, sessionId);
 
   /// 按父记忆分组的原子索引（每次检索构建一次，避免 O(n×m) 重复扫描）
   Map<String, List<MemoryAtom>> _atomIndexByMemory() {
@@ -1513,6 +1562,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       (c) => c.id == activeApiId,
       orElse: () => apiConfigs.first,
     );
+  }
+
+  /// 当前生效的模型名（供应商-模型两级：activeApi 的当前模型）。
+  /// 供应商存在但还没选模型时返回 null（UI 显示"未选择模型"）。
+  String? get activeModelName {
+    final api = activeApi;
+    if (api == null) return null;
+    final model = api.model.trim();
+    return model.isEmpty ? null : model;
   }
 
   Persona? get activePersona {
@@ -1588,10 +1646,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final idx = groupChats.indexWhere((e) => e.id == g.id);
     if (idx >= 0) {
       groupChats[idx] = g;
-      log.i('group', '更新群聊：${g.name}（${g.personaIds.length} 个成员）');
+      Log.i('group', '更新群聊：${g.name}（${g.personaIds.length} 个成员）');
     } else {
       groupChats.add(g);
-      log.i('group', '新增群聊：${g.name}（${g.personaIds.length} 个成员）');
+      Log.i('group', '新增群聊：${g.name}（${g.personaIds.length} 个成员）');
     }
     await _storage.saveGroupChats(groupChats);
     notifyListeners();
@@ -1601,7 +1659,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final name = groupChats.where((g) => g.id == id).firstOrNull?.name ?? id;
     groupChats.removeWhere((g) => g.id == id);
     await _storage.saveGroupChats(groupChats);
-    log.i('group', '删除群聊：$name');
+    Log.i('group', '删除群聊：$name');
     notifyListeners();
   }
 
@@ -1609,13 +1667,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> updateUserProfile(UserProfile profile) async {
     userProfile = profile;
     await _storage.saveUserProfile(profile);
-    log.i('app', '更新用户资料：${profile.name}');
+    Log.i('app', '更新用户资料：${profile.name}');
     notifyListeners();
   }
 
   // ---------- 初始化 ----------
   Future<void> load() async {
-    log.i('app', '开始加载应用状态');
+    Log.i('app', '开始加载应用状态');
     await _storage.init();
     apiConfigs = _storage.loadApiConfigs();
     activeApiId = _storage.activeApiId;
@@ -1635,7 +1693,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final beforeAtoms = memoryAtoms.length;
     memoryAtoms = pruneOrphanAtoms(memoryAtoms, validIds);
     if (memoryAtoms.length != beforeAtoms) {
-      log.w(
+      Log.w(
         'memory',
         '清理孤儿原子：${beforeAtoms - memoryAtoms.length} 个'
             '（父记忆已删除）',
@@ -1688,6 +1746,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       consolidationGranularity: 'session',
       consolidationKeepOriginal: 'archive',
     );
+    promptInjectionSettings = _storage.loadPromptInjectionSettings();
+    worldBookSettings = _storage.loadWorldBookSettings();
+    generationStyleSettings = _storage.loadGenerationStyleSettings();
     tokenUsage = _storage.loadTokenUsage();
     final dailyRecords = _storage.loadTokenDailyRecords();
     // 迁移：如果累计有数据但按天记录为空，把累计值作为今天的初始数据
@@ -1704,14 +1765,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       );
       tokenUsage = tokenUsage.copyWith(dailyRecords: [migrated]);
       await _storage.saveTokenDailyRecords([migrated]);
-      log.i('app', '迁移 Token 按天记录：累计值作为今日初始数据');
+      Log.i('app', '迁移 Token 按天记录：累计值作为今日初始数据');
     } else {
       tokenUsage = tokenUsage.copyWith(dailyRecords: dailyRecords);
     }
     appLaunchCount = _storage.appLaunchCount;
     notifyListeners();
 
-    log.i(
+    Log.i(
       'app',
       '应用状态加载完成：'
           'API配置 ${apiConfigs.length} 个、'
@@ -1734,11 +1795,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final idx = apiConfigs.indexWhere((c) => c.id == config.id);
     if (idx >= 0) {
       apiConfigs[idx] = config;
-      log.i('api', '更新 API 配置：${config.name}');
+      Log.i('api', '更新 API 配置：${config.name}');
     } else {
       apiConfigs.add(config);
       activeApiId ??= config.id;
-      log.i('api', '新增 API 配置：${config.name}（${config.model}）');
+      Log.i('api', '新增 API 配置：${config.name}（${config.model}）');
     }
     await _storage.saveApiConfigs(apiConfigs);
     await _storage.setActiveApiId(activeApiId);
@@ -1753,7 +1814,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     await _storage.saveApiConfigs(apiConfigs);
     await _storage.setActiveApiId(activeApiId);
-    log.i('api', '删除 API 配置：$name');
+    Log.i('api', '删除 API 配置：$name');
     notifyListeners();
   }
 
@@ -1761,14 +1822,45 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     activeApiId = id;
     await _storage.setActiveApiId(id);
     final name = apiConfigs.where((c) => c.id == id).firstOrNull?.name ?? id;
-    log.i('api', '激活 API：$name');
+    Log.i('api', '激活 API：$name');
+    notifyListeners();
+  }
+
+  /// 选中供应商下的某个模型：更新该供应商的当前模型，并把供应商设为全局激活。
+  /// 供应商-模型两级配置下，对话与记忆任务都用 activeApi.model。
+  Future<void> setActiveModel(String providerId, String modelId) async {
+    final idx = apiConfigs.indexWhere((c) => c.id == providerId);
+    if (idx < 0) return;
+    final entry = apiConfigs[idx].models
+        .where((m) => m.id == modelId)
+        .firstOrNull;
+    if (entry == null) return;
+    apiConfigs[idx].model = entry.model;
+    await _storage.saveApiConfigs(apiConfigs);
+    Log.i('api', '选中模型：${apiConfigs[idx].name}/${entry.model}');
+    await setActiveApi(providerId);
+  }
+
+  /// 从供应商下移除一个模型档位；被移除的是当前模型时回退到第一个剩余档位
+  Future<void> deleteModel(String providerId, String modelId) async {
+    final idx = apiConfigs.indexWhere((c) => c.id == providerId);
+    if (idx < 0) return;
+    final config = apiConfigs[idx];
+    final entry = config.models.where((m) => m.id == modelId).firstOrNull;
+    if (entry == null) return;
+    config.models.removeWhere((m) => m.id == modelId);
+    if (config.model == entry.model) {
+      config.model = config.models.isEmpty ? '' : config.models.first.model;
+    }
+    await _storage.saveApiConfigs(apiConfigs);
+    Log.i('api', '移除模型：${config.name}/${entry.model}');
     notifyListeners();
   }
 
   Future<void> updateEmbeddingApi(EmbeddingApiConfig config) async {
     embeddingApiConfig = config;
     await _storage.saveEmbeddingApiConfig(config);
-    log.i(
+    Log.i(
       'api',
       '更新嵌入 API 配置：${config.model} '
           '（有效=${config.isValid}）',
@@ -1781,10 +1873,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final idx = personas.indexWhere((e) => e.id == p.id);
     if (idx >= 0) {
       personas[idx] = p;
-      log.i('persona', '更新人格：${p.name}');
+      Log.i('persona', '更新人格：${p.name}');
     } else {
       personas.add(p);
-      log.i('persona', '新增人格：${p.name}（${p.emoji}）');
+      Log.i('persona', '新增人格：${p.name}（${p.emoji}）');
     }
     await _storage.savePersonas(personas);
     notifyListeners();
@@ -1795,13 +1887,15 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     personas.removeWhere((p) => p.id == id);
     if (activePersonaId == id) activePersonaId = null;
     // 级联清理该人物的记忆、原子与图谱痕迹（与 UI 确认文案一致）
-    final memoryIds =
-        memories.where((m) => m.personaId == id).map((m) => m.id).toList();
+    final memoryIds = memories
+        .where((m) => m.personaId == id)
+        .map((m) => m.id)
+        .toList();
     for (final memoryId in memoryIds) {
       _removeMemoryInternal(memoryId);
     }
     if (memoryIds.isNotEmpty) {
-      log.i(
+      Log.i(
         'memory',
         '删除人格「$name」：级联清理 ${memoryIds.length} 条记忆'
             '及其原子与图谱痕迹',
@@ -1811,7 +1905,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     await _storage.savePersonas(personas);
     await _storage.setActivePersonaId(activePersonaId);
-    log.i('persona', '删除人格：$name');
+    Log.i('persona', '删除人格：$name');
     notifyListeners();
   }
 
@@ -1886,7 +1980,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       sessionId: sessionId,
     );
     memories.insert(0, memory);
-    log.i(
+    Log.i(
       'memory',
       '新增记忆（来源=$source）：'
           '${normalized.length > 40 ? "${normalized.substring(0, 40)}..." : normalized}',
@@ -1907,8 +2001,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       );
       if (atoms.isNotEmpty) {
         memoryAtoms.addAll(atoms);
-        memory.atomTypes =
-            atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+        memory.atomTypes = atoms.map((a) => a.atomType.name).toSet().toList()
+          ..sort();
         if (memorySettings.graphEnabled) {
           graphStore.indexMemory(memory, atoms);
         }
@@ -1939,9 +2033,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       memory.embedding = result.embedding;
       _scheduleMemoriesPersist();
       await addTokenUsage(inputTokens: result.inputTokens);
-      log.d('memory', '记忆嵌入计算完成：维度=${result.embedding.length}');
+      Log.d('memory', '记忆嵌入计算完成：维度=${result.embedding.length}');
     } catch (e) {
-      log.w('memory', '记忆嵌入计算失败', error: e);
+      Log.w('memory', '记忆嵌入计算失败', error: e);
     }
   }
 
@@ -1966,14 +2060,17 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
     final newContent = content?.trim();
     final contentChanged =
-        newContent != null && newContent.isNotEmpty && newContent != memory.content;
-    final factsChanged = keyFacts != null && !_stringListEquals(
-      keyFacts,
-      memory.keyFacts,
-    );
+        newContent != null &&
+        newContent.isNotEmpty &&
+        newContent != memory.content;
+    final factsChanged =
+        keyFacts != null && !_stringListEquals(keyFacts, memory.keyFacts);
     final importanceChanged =
         importance != null && (importance - memory.importance).abs() > 1e-9;
-    if (!contentChanged && !factsChanged && !importanceChanged && topics == null) {
+    if (!contentChanged &&
+        !factsChanged &&
+        !importanceChanged &&
+        topics == null) {
       return;
     }
 
@@ -2001,8 +2098,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           personaId: memory.personaId,
         );
         memoryAtoms.addAll(atoms);
-        memory.atomTypes =
-            atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+        memory.atomTypes = atoms.map((a) => a.atomType.name).toSet().toList()
+          ..sort();
       } else {
         memory.atomTypes = [];
       }
@@ -2012,9 +2109,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       _scheduleMemoryAuxPersist();
     }
 
-    log.i(
+    Log.i(
       'memory',
-      '编辑记忆：${id.substring(0, 8)}'
+      '编辑记忆：${id.length > 8 ? id.substring(0, 8) : id}'
           '${contentChanged ? "（正文）" : ""}'
           '${factsChanged ? "（关键事实）" : ""}'
           '${importanceChanged ? "（重要性）" : ""}',
@@ -2042,12 +2139,14 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> setMemoryArchived(String id, bool archived) async {
     final index = memories.indexWhere((e) => e.id == id);
     if (index < 0) return;
+    // 日志截断前 8 位；短 id（测试/导入）直接全量输出
+    final shortId = id.length > 8 ? id.substring(0, 8) : id;
     if (archived) {
       archiveMemory(memories[index]);
-      log.i('memory', '归档记忆：${id.substring(0, 8)}');
+      Log.i('memory', '归档记忆：$shortId');
     } else {
       restoreMemory(memories[index]);
-      log.i('memory', '恢复记忆：${id.substring(0, 8)}');
+      Log.i('memory', '恢复记忆：$shortId');
     }
     notifyListeners();
     _scheduleMemoriesPersist();
@@ -2083,8 +2182,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         );
         if (atoms.isNotEmpty) {
           memoryAtoms.addAll(atoms);
-          m.atomTypes =
-              atoms.map((a) => a.atomType.name).toSet().toList()..sort();
+          m.atomTypes = atoms.map((a) => a.atomType.name).toSet().toList()
+            ..sort();
           if (memorySettings.graphEnabled) {
             graphStore.indexMemory(m, atoms);
           }
@@ -2092,7 +2191,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
     if (imported > 0) {
-      log.i('memory', '批量导入记忆：$imported 条');
+      Log.i('memory', '批量导入记忆：$imported 条');
       notifyListeners();
       _scheduleMemoriesPersist();
       _scheduleMemoryAuxPersist();
@@ -2123,27 +2222,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       createdAt: now,
       updatedAt: now,
     );
-    // 单聊开场白
-    if (gid == null) {
-      final p = personaById(pid);
-      if (p != null && p.greeting.isNotEmpty) {
-        session.messages.add(
-          ChatMessage(
-            id: _uuid.v4(),
-            role: 'assistant',
-            content: p.greeting,
-            timestamp: now,
-            speakerId: p.id,
-          ),
-        );
-      }
-    }
     sessions.insert(0, session);
     currentSessionId = session.id;
-    log.i(
+    Log.i(
       'chat',
       '新建会话：$title（${gid != null ? "群聊" : "单聊"}）'
-          ' id=${session.id.substring(0, 8)}',
+          ' id=${session.id.length > 8 ? session.id.substring(0, 8) : session.id}',
     );
     notifyListeners();
     _scheduleSessionsPersist();
@@ -2189,9 +2273,64 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     if (memoryReflectionState.remove(id) != null) {
       _scheduleMemoryAuxPersist();
     }
-    log.i('chat', '删除会话：$title');
+    Log.i('chat', '删除会话：$title');
     notifyListeners();
     _scheduleSessionsPersist();
+  }
+
+  /// 批量删除会话（聊天记录管理页用）
+  Future<void> deleteSessions(List<String> ids) async {
+    if (ids.isEmpty) return;
+    final idSet = ids.toSet();
+    final titles = sessions
+        .where((s) => idSet.contains(s.id))
+        .map((s) => s.title)
+        .toList();
+    _segmentedDeliveryScheduler.cancelAll();
+    for (final id in ids) {
+      if (currentSessionId == id) cancelPendingMerge();
+      sessions.removeWhere((s) => s.id == id);
+      if (currentSessionId == id) currentSessionId = null;
+      if (memoryReflectionState.remove(id) != null) {
+        _scheduleMemoryAuxPersist();
+      }
+    }
+    Log.i('chat', '批量删除会话：${titles.length} 个');
+    notifyListeners();
+    _scheduleSessionsPersist();
+  }
+
+  /// 删除单条消息（长按菜单/多选用）。
+  /// 目标是正在生成中的消息时，先停止回复再删除。
+  void deleteMessage(String sessionId, String messageId) {
+    final session = sessions.where((s) => s.id == sessionId).firstOrNull;
+    if (session == null) return;
+    final message = session.messages
+        .where((m) => m.id == messageId)
+        .firstOrNull;
+    if (message == null) return;
+    if (message.isStreaming || message.isSegmented) {
+      Log.i('chat', '删除正在生成的消息，先停止回复');
+      stopGeneration();
+    }
+    session.messages.removeWhere((m) => m.id == messageId);
+    // 同步已知集合，避免聊天页入场动画逻辑残留
+    notifyListeners();
+    _scheduleSessionsPersist();
+  }
+
+  /// 测试钩子：暴露 API 消息构建结果（含引用注入）
+  @visibleForTesting
+  List<Map<String, dynamic>> debugBuildApiMessages(
+    ChatSession session, {
+    required String systemPrompt,
+  }) {
+    return _buildApiMessages(
+      session: session,
+      systemPrompt: systemPrompt,
+      isGroup: session.isGroup,
+      segmentedSettings: segmentedSendSettings.normalized(),
+    );
   }
 
   Future<void> clearSessions() async {
@@ -2204,7 +2343,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       memoryReflectionState.clear();
       _scheduleMemoryAuxPersist();
     }
-    log.w('chat', '清空所有会话（共 $count 个）');
+    Log.w('chat', '清空所有会话（共 $count 个）');
     notifyListeners();
     _scheduleSessionsPersist();
   }
@@ -2223,6 +2362,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> sendMessage(
     String text, {
     List<String>? mentionedPersonaIds,
+    MessageQuote? quote,
   }) async {
     final api = activeApi;
     var session = currentSession ?? await newSession();
@@ -2239,10 +2379,10 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       await _segmentedDeliveryScheduler.whenIdle(session.id);
     }
 
-    log.d(
+    Log.d(
       'chat',
       '发送消息 [${isGroup ? "群聊" : "单聊"}] '
-          '会话=${session.id.substring(0, 8)} '
+          '会话=${session.id.length > 8 ? session.id.substring(0, 8) : session.id} '
           '长度=${text.length} '
           '@=${mentions.length}',
     );
@@ -2254,7 +2394,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final speaker = isGroup ? _pickGroupSpeaker(group, mentions) : null;
 
     // 追加用户消息
-    _appendUserMessage(session, text, mentions);
+    _appendUserMessage(session, text, mentions, quote: quote);
     _maybeUpdateSessionTitle(session, text, isGroup, group);
     session.updatedAt = DateTime.now();
     notifyListeners();
@@ -2262,15 +2402,21 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
     // 群聊未被 @ 任何人：不触发 AI 回复
     if (isGroup && speaker == null) {
-      log.d('chat', '群聊消息未 @ 任何角色，不触发回复');
+      Log.d('chat', '群聊消息未 @ 任何角色，不触发回复');
       return;
     }
 
-    // 单聊必须有可用 API
+    // 单聊必须有可用 API；供应商-模型两级下还需已选模型
     if (api == null) {
-      lastError = '请先在设置中添加并激活一个 API 配置';
+      lastError = '请先在设置中添加并激活一个 API 供应商';
       notifyListeners();
-      log.w('chat', '无可用 API，无法发送回复');
+      Log.w('chat', '无可用 API，无法发送回复');
+      return;
+    }
+    if (api.model.trim().isEmpty) {
+      lastError = '请先在 API 配置中选择要使用的模型';
+      notifyListeners();
+      Log.w('chat', '供应商 ${api.name} 未选择模型，无法发送回复');
       return;
     }
 
@@ -2284,7 +2430,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           mentionedPersonaIds: mentions,
         ),
       );
-      log.d('chat', '回复进行中，消息入队（待处理 ${_pendingReplies.length} 条）');
+      Log.d('chat', '回复进行中，消息入队（待处理 ${_pendingReplies.length} 条）');
       return;
     }
 
@@ -2293,7 +2439,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
 
     // 私聊消息合并防抖：等待一段时间，合并后续消息后一起发送
     if (messageMergeEnabled && !isGroup) {
-      log.d('chat', '消息合并已启用，调度防抖回复（${messageMergeDebounce}s）');
+      Log.d('chat', '消息合并已启用，调度防抖回复（${messageMergeDebounce}s）');
       _scheduleMergedReply(session: session, api: api, persona: persona);
       return;
     }
@@ -2464,14 +2610,16 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   void _appendUserMessage(
     ChatSession session,
     String text,
-    List<String> mentions,
-  ) {
+    List<String> mentions, {
+    MessageQuote? quote,
+  }) {
     final userMsg = ChatMessage(
       id: _uuid.v4(),
       role: 'user',
       content: text,
       timestamp: DateTime.now(),
       mentionIds: mentions,
+      quote: quote,
     );
     // 防御式：只要末尾存在流式加载气泡，就把用户新消息插在气泡上方
     // 覆盖两种场景：AI 正在回复(isSending)、防抖等待中(isPendingMerge)
@@ -2520,7 +2668,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     lastError = null;
     notifyListeners();
 
-    log.i(
+    Log.i(
       'chat',
       '回复循环开始 [${isGroup ? "群聊" : "单聊"}] '
           '角色=${(currentSpeaker ?? persona)?.name ?? "默认"}',
@@ -2543,11 +2691,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         } on _CancelException {
           // 用户主动打断：移除空的加载气泡，保留已生成内容
           _removeEmptyStreaming(session);
-          log.i('chat', '用户主动打断生成');
+          Log.i('chat', '用户主动打断生成');
           break;
         } catch (e, s) {
           lastError = e.toString();
-          log.e('chat', '回复循环出错', error: e, stackTrace: s);
+          Log.e('chat', '回复循环出错', error: e, stackTrace: s);
           // 复用正在加载的气泡显示错误，避免遗留空气泡
           final sIdx = session.messages.lastIndexWhere((m) => m.isStreaming);
           if (sIdx >= 0) {
@@ -2576,7 +2724,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         currentSpeaker = next.speaker;
         currentText = next.text;
         currentMentions = next.mentionedPersonaIds;
-        log.d('chat', '处理待处理消息：${currentText.length} 字符');
+        Log.d('chat', '处理待处理消息：${currentText.length} 字符');
       }
     } finally {
       session.updatedAt = DateTime.now();
@@ -2585,7 +2733,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
       _scheduleSessionsPersist();
       _resetIdleTimer(session);
-      log.i('chat', '回复循环结束');
+      Log.i('chat', '回复循环结束');
       // 回复结束后立即检查是否需要总结（不阻塞 UI）
       _checkAndSummarize(session);
       final pendingMergeSid = _pendingMergedSessionId;
@@ -2657,18 +2805,23 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }) async {
     final outputMode = assistantOutputMode;
     final segmentedSettings = segmentedSendSettings.normalized();
-    final systemPrompt = _buildSystemPrompt(
-      isGroup: isGroup,
-      group: group,
+    final recentTexts = session.messages
+        .where((m) => m.role != 'tool')
+        .toList()
+        .reversed
+        .take(worldBookSettings.scanDepth)
+        .map((m) => stripStickerInternalMarkers(m.content))
+        .where((s) => s.trim().isNotEmpty)
+        .toList();
+
+    final apiMessages = _assembleApiMessages(
+      session: session,
       persona: persona,
       speaker: speaker,
-      mentions: mentions,
-    );
-
-    final apiMessages = _buildApiMessages(
-      session: session,
-      systemPrompt: systemPrompt,
       isGroup: isGroup,
+      group: group,
+      mentions: mentions,
+      recentMessageTexts: recentTexts,
       segmentedSettings: segmentedSettings,
     );
 
@@ -2694,44 +2847,104 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
+  /// 完整装配一轮请求的消息数组：
+  /// [system 稳定系统提示词] + 聊天记录 + 尾部注入（场景 depth / 世界书 depth /
+  /// 实时状态 depth 1）。除记忆注入在最后改写末条用户消息外，全部在此完成。
+  List<Map<String, dynamic>> _assembleApiMessages({
+    required ChatSession session,
+    required Persona? persona,
+    required Persona? speaker,
+    required bool isGroup,
+    required GroupChat? group,
+    required List<String> mentions,
+    required List<String> recentMessageTexts,
+    required SegmentedSendSettings segmentedSettings,
+  }) {
+    final systemPrompt = _buildSystemPrompt(
+      isGroup: isGroup,
+      group: group,
+      persona: persona,
+      speaker: speaker,
+      mentions: mentions,
+      recentMessageTexts: recentMessageTexts,
+    );
+    final apiMessages = _buildApiMessages(
+      session: session,
+      systemPrompt: systemPrompt,
+      isGroup: isGroup,
+      segmentedSettings: segmentedSettings,
+    );
+
+    // 模式注入：depth 模式把风格注入文本插到聊天记录深处；
+    // 世界书位置为 depth 时同样插入聊天记录
+    _applyDepthInjection(apiMessages, isGroup: isGroup);
+    _applyWorldBookDepthInjection(
+      apiMessages,
+      recentMessageTexts: recentMessageTexts,
+    );
+    // 实时状态（时间/场景/对象）是分钟级易变内容，固定注入在聊天记录
+    // 末尾附近（depth 1：紧邻最新一条消息），系统提示词保持逐字稳定，
+    // 供应商前缀缓存不失效；对 AI 的时间感知与拟人效果没有影响。
+    _applyContextInjection(apiMessages, isGroup: isGroup, group: group);
+    return apiMessages;
+  }
+
+  /// 测试钩子：暴露完整装配结果（含尾部注入，不含记忆注入）
+  @visibleForTesting
+  List<Map<String, dynamic>> debugAssembleApiMessages(
+    ChatSession session, {
+    Persona? speaker,
+    List<String> mentions = const [],
+  }) {
+    final isGroup = session.isGroup;
+    return _assembleApiMessages(
+      session: session,
+      persona: isGroup ? null : personaOf(session),
+      speaker: speaker,
+      isGroup: isGroup,
+      group: isGroup ? groupOf(session) : null,
+      mentions: mentions,
+      recentMessageTexts: session.messages
+          .where((m) => m.role != 'tool')
+          .map((m) => stripStickerInternalMarkers(m.content))
+          .where((s) => s.trim().isNotEmpty)
+          .toList(),
+      segmentedSettings: segmentedSendSettings.normalized(),
+    );
+  }
+
+  /// 组装系统提示词：角色卡拟人模板 + 世界书 + 模式注入 + 生成风格，
+  /// 再追加记忆工具与表情包协议。群聊时发言人用完整档案、其他成员一行式简介。
+  /// 注意：只包含逐字稳定的块，实时状态由 [_applyContextInjection] 尾部注入，
+  /// 保证供应商前缀缓存不失效。
   String _buildSystemPrompt({
     required bool isGroup,
     required GroupChat? group,
     required Persona? persona,
     required Persona? speaker,
     required List<String> mentions,
+    required List<String> recentMessageTexts,
   }) {
+    // 角色专属生成风格优先，留空跟随全局
+    final personaStyle = (isGroup ? speaker : persona)?.stylePrompt.trim();
+    final effectiveStyle = (personaStyle != null && personaStyle.isNotEmpty)
+        ? personaStyle
+        : generationStyleSettings.stylePrompt;
+    final body = CharacterPrompt.build(
+      isGroup: isGroup,
+      group: group,
+      persona: persona,
+      speaker: speaker,
+      mentions: mentions,
+      allPersonas: personas,
+      injection: promptInjectionSettings,
+      worldBook: worldBookSettings,
+      stylePrompt: effectiveStyle,
+      recentMessageTexts: recentMessageTexts,
+    );
+
     final buf = StringBuffer();
-    if (isGroup && group != null) {
-      buf.writeln('这是一个多人群聊场景。群里有以下角色：');
-      for (final pid in group.personaIds) {
-        final p = personaById(pid);
-        if (p == null) continue;
-        buf.writeln('\n--- 角色：${p.name} ---');
-        buf.write(p.buildSystemPrompt());
-      }
-      final mentionedNames = mentions
-          .map((id) => personaById(id)?.name)
-          .whereType<String>()
-          .join('、');
-      final speakerName = speaker?.name ?? '助手';
-      if (mentionedNames.isNotEmpty) {
-        buf.writeln(
-          '\n\n用户在最新消息中 @ 了「$mentionedNames」。请以「$speakerName」的身份回复用户，'
-          '保持该角色的性格和语言风格。你可以看到完整的群聊上下文，结合此前所有角色的发言理解语境。'
-          '不要在回复开头重复角色名。',
-        );
-      } else {
-        buf.writeln(
-          '\n\n现在轮到「$speakerName」发言。请以「$speakerName」的身份回复用户，'
-          '保持该角色的性格和语言风格。不要在回复开头重复角色名。',
-        );
-      }
-    } else if (persona != null) {
-      buf.write(persona.buildSystemPrompt());
-    } else {
-      buf.writeln('你是一个乐于助人的 AI 助手。');
-    }
+    buf.write(body);
     // 引导 AI 主动使用记忆工具读写长期记忆
     buf.writeln(
       '\n\n【记忆工具】你有两个长期记忆工具：'
@@ -2771,6 +2984,63 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     return buf.toString();
   }
 
+  /// 模式注入（@Depth）：depth 模式下把私聊/群聊风格注入文本插入聊天记录深处
+  void _applyDepthInjection(
+    List<Map<String, dynamic>> apiMessages, {
+    required bool isGroup,
+  }) {
+    final text = CharacterPrompt.depthInjectionText(
+      settings: promptInjectionSettings,
+      isGroup: isGroup,
+    );
+    if (text == null) return;
+    CharacterPrompt.insertDepthInjection(apiMessages, {
+      'role': promptInjectionSettings.role,
+      'content': text,
+    }, depth: promptInjectionSettings.depth);
+  }
+
+  /// 世界书 @Depth 注入：位置为 depth 时把激活的世界书块插入聊天记录深处
+  void _applyWorldBookDepthInjection(
+    List<Map<String, dynamic>> apiMessages, {
+    required List<String> recentMessageTexts,
+  }) {
+    final block = CharacterPrompt.worldBookDepthBlock(
+      settings: worldBookSettings,
+      recentMessageTexts: recentMessageTexts,
+    );
+    if (block == null) return;
+    CharacterPrompt.insertDepthInjection(apiMessages, {
+      'role': worldBookSettings.injectionRole,
+      'content': block,
+    }, depth: worldBookSettings.injectionDepth);
+  }
+
+  /// 实时状态尾部注入：固定 depth 1（紧邻最新消息之前），role=system。
+  /// 系统提示词里不再携带时间，保证逐字稳定以命中供应商前缀缓存。
+  void _applyContextInjection(
+    List<Map<String, dynamic>> apiMessages, {
+    required bool isGroup,
+    required GroupChat? group,
+  }) {
+    final injection = CharacterPrompt.buildContextInjection(
+      now: DateTime.now(),
+      isGroup: isGroup,
+      userName: userProfile.name,
+      userDescription: userProfile.description,
+      groupName: group?.name,
+      groupMemberNames: isGroup
+          ? (group?.personaIds ?? const [])
+                .map((id) => personaById(id)?.name)
+                .whereType<String>()
+                .toList()
+          : const [],
+      customTemplate: promptInjectionSettings.contextPrompt,
+    );
+    if (injection == null) return;
+    CharacterPrompt.insertDepthInjection(apiMessages, injection, depth: 1);
+  }
+
   List<Map<String, dynamic>> _buildApiMessages({
     required ChatSession session,
     required String systemPrompt,
@@ -2789,6 +3059,12 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
             return {'role': 'assistant', 'content': '[${sp.name}] $cleaned'};
           }
         }
+        String withQuote(String body) {
+          final quote = m.quote;
+          if (quote == null || quote.text.trim().isEmpty) return body;
+          return '${quote.toContextLine()}\n$body';
+        }
+
         if (m.role == 'user' && segmentedSettings.reverseReplace) {
           // 反向替换用户消息：UI 显示原文，发给 AI 的为还原后内容
           final restored = SegmentedSplitter.applyReverseReplace(
@@ -2797,11 +3073,11 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           );
           final cleaned = stripStickerInternalMarkers(restored);
           if (cleaned.isEmpty && cleaned != restored.trim()) return null;
-          return {'role': 'user', 'content': cleaned};
+          return {'role': 'user', 'content': withQuote(cleaned)};
         }
         final cleaned = stripStickerInternalMarkers(m.content);
         if (cleaned.isEmpty && cleaned != m.content.trim()) return null;
-        return {'role': m.role, 'content': cleaned};
+        return {'role': m.role, 'content': withQuote(cleaned)};
       }).whereType<Map<String, dynamic>>(),
     ];
   }
@@ -2814,7 +3090,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }) async {
     // 注入前清除历史中已注入的旧记忆片段（新旧两种格式），避免重复累积
     final stripped = stripInjectedMemories(apiMessages);
-    if (stripped) log.d('memory', '已剥离历史中的旧记忆注入块');
+    if (stripped) Log.d('memory', '已剥离历史中的旧记忆注入块');
 
     final relevant = await _retrieveRelevantMemories(
       text,
@@ -2838,7 +3114,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         ? '$memoryBlock\n$original'
         : '$original\n$memoryBlock';
     apiMessages[lastUser] = {'role': 'user', 'content': injected};
-    log.d(
+    Log.d(
       'memory',
       '注入 ${relevant.length} 条记忆到用户消息'
           '（${memorySettings.injectionPosition}，'
@@ -2860,7 +3136,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     for (var round = 0; round < 5; round++) {
       if (_cancelToken?.isCancelled == true) throw const _CancelException();
 
-      log.d(
+      Log.d(
         'api',
         'Agent 循环第 ${round + 1}/5 轮，'
             '消息数=${apiMessages.length}，工具数=${tools.length}',
@@ -2894,7 +3170,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         cachedTokens: resp.cachedTokens,
       );
 
-      log.i(
+      Log.i(
         'api',
         '流式响应完成：输入=${resp.inputTokens} '
             '输出=${resp.outputTokens} '
@@ -3136,7 +3412,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     required Persona? speaker,
     required Persona? persona,
   }) async {
-    log.d('tool', '执行 ${toolCalls.length} 个工具调用');
+    Log.d('tool', '执行 ${toolCalls.length} 个工具调用');
     for (final tc in toolCalls) {
       final result = await _executeOneTool(
         tc: tc,
@@ -3158,7 +3434,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
           toolName: tc.name,
         ),
       );
-      log.i(
+      Log.i(
         'tool',
         '工具调用完成：${tc.name} → '
             '${result.length > 80 ? "${result.substring(0, 80)}..." : result}',
@@ -3173,7 +3449,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     required Persona? persona,
     required String sessionId,
   }) async {
-    log.d('tool', '调用工具 ${tc.name}，参数=${tc.arguments}');
+    Log.d('tool', '调用工具 ${tc.name}，参数=${tc.arguments}');
     final builtin = BuiltinTools.definitions
         .where((t) => t.name == tc.name)
         .toList();
@@ -3207,7 +3483,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     }
     final custom = customTools.where((t) => t.name == tc.name).toList();
     if (custom.isEmpty) {
-      log.w('tool', '未找到工具: ${tc.name}');
+      Log.w('tool', '未找到工具: ${tc.name}');
       return '未找到工具: ${tc.name}';
     }
     return HttpToolExecutor.execute(custom.first, tc.arguments);
@@ -3223,10 +3499,9 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
     final k = requestedK.clamp(1, memorySettings.maxK).toInt();
     final atomIndex = _atomIndexByMemory();
     final candidates = memories
-        .map((m) => RetrievalMemory(
-              entry: m,
-              atoms: atomIndex[m.id] ?? const [],
-            ))
+        .map(
+          (m) => RetrievalMemory(entry: m, atoms: atomIndex[m.id] ?? const []),
+        )
         .toList();
 
     List<double>? queryEmbedding;
@@ -3295,15 +3570,17 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       },
       'count': results.length,
       'results': results
-          .map((r) => {
-                'id': r.entry.id,
-                'content': r.entry.displayContent,
-                'score': double.parse(r.finalScore.toStringAsFixed(4)),
-                'importance': r.entry.importance,
-                'create_time': r.entry.createdAt.toIso8601String(),
-                if (r.entry.topics.isNotEmpty) 'topics': r.entry.topics,
-                if (r.entry.keyFacts.isNotEmpty) 'key_facts': r.entry.keyFacts,
-              })
+          .map(
+            (r) => {
+              'id': r.entry.id,
+              'content': r.entry.displayContent,
+              'score': double.parse(r.finalScore.toStringAsFixed(4)),
+              'importance': r.entry.importance,
+              'create_time': r.entry.createdAt.toIso8601String(),
+              if (r.entry.topics.isNotEmpty) 'topics': r.entry.topics,
+              if (r.entry.keyFacts.isNotEmpty) 'key_facts': r.entry.keyFacts,
+            },
+          )
           .toList(),
     };
     return jsonEncode(payload);

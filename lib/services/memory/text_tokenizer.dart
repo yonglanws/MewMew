@@ -50,7 +50,8 @@ const Set<String> defaultStopwords = {
 final RegExp _punctPattern = RegExp(
   r'[!"#\$%&\(\)\*\+,\-\.\/:;<=>\?@\[\\\]^_`\{\|\}~'
   r'！＂＃＄％＆＇（）＊＋，－．／：；＜＝＞＠［＼］＾＿｀｛｜｝～'
-  r'、。，．：；？！""''「」『』（）《》〈〉【】〔〕［］｛｝…—·～｜]',
+  r'、。，．：；？！""'
+  '「」『』（）《》〈〉【】〔〕［］｛｝…—·～｜]',
 );
 
 final RegExp _urlPattern = RegExp(r'https?://\S+|www\.\S+');
@@ -128,7 +129,8 @@ List<String> tokenize(String text, {Set<String>? extraStopwords}) {
     if (token.isEmpty) continue;
     var hasAlnum = false;
     for (final cu in token.runes) {
-      final isAsciiAlnum = (cu >= 0x30 && cu <= 0x39) ||
+      final isAsciiAlnum =
+          (cu >= 0x30 && cu <= 0x39) ||
           (cu >= 0x41 && cu <= 0x5A) ||
           (cu >= 0x61 && cu <= 0x7A);
       if (isAsciiAlnum || _isCjk(cu)) {
@@ -137,8 +139,7 @@ List<String> tokenize(String text, {Set<String>? extraStopwords}) {
       }
     }
     if (!hasAlnum) continue; // 纯标点
-    if (token.length == 1 &&
-        token.runes.first < 0x80) {
+    if (token.length == 1 && token.runes.first < 0x80) {
       continue; // 单个 ASCII 字符无区分度（单 CJK 字保留）
     }
     if (defaultStopwords.contains(token)) continue;

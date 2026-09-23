@@ -60,8 +60,7 @@ class _DashboardPageState extends State<DashboardPage> {
               icon: const Icon(Icons.arrow_back_ios_new_rounded),
               onPressed: () => Navigator.pop(context),
             ),
-            title: Text('仪表盘',
-                style: largeAppBarTitleStyle(context)),
+            title: Text('仪表盘', style: largeAppBarTitleStyle(context)),
           ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
@@ -106,12 +105,12 @@ class _HeatMapConfig {
 
   /// 级别到颜色插值系数（0=空，1-4=由浅到深）
   static double tOf(int level) => switch (level) {
-        0 => 0.0,
-        1 => 0.28,
-        2 => 0.5,
-        3 => 0.72,
-        _ => 0.95,
-      };
+    0 => 0.0,
+    1 => 0.28,
+    2 => 0.5,
+    3 => 0.72,
+    _ => 0.95,
+  };
 
   /// 由级别生成颜色
   static Color colorOf(ColorScheme cs, int level) {
@@ -133,11 +132,13 @@ class _HeatMapCard extends StatelessWidget {
     final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
     // 今天所在周的周一，确保最后一周包含今天
-    final todayWeekStart =
-        todayDate.subtract(Duration(days: todayDate.weekday - 1));
+    final todayWeekStart = todayDate.subtract(
+      Duration(days: todayDate.weekday - 1),
+    );
     // 网格起始：从今天所在周往回数 (weeksToShow-1) 周
-    final adjustedStart = todayWeekStart
-        .subtract(Duration(days: (_HeatMapConfig.weeksToShow - 1) * 7));
+    final adjustedStart = todayWeekStart.subtract(
+      Duration(days: (_HeatMapConfig.weeksToShow - 1) * 7),
+    );
 
     // 统计摘要
     final stats = _computeStats(heatData, adjustedStart, todayDate);
@@ -174,10 +175,8 @@ class _HeatMapCard extends StatelessWidget {
                 width: _HeatMapConfig.cellSize,
                 height: _HeatMapConfig.cellSize,
                 decoration: BoxDecoration(
-                  color: Color.lerp(
-                      cs.surfaceContainerHigh, cs.primary, 0.15),
-                  borderRadius:
-                      BorderRadius.circular(_HeatMapConfig.radius),
+                  color: Color.lerp(cs.surfaceContainerHigh, cs.primary, 0.15),
+                  borderRadius: BorderRadius.circular(_HeatMapConfig.radius),
                   border: Border.all(color: cs.primary, width: 1.5),
                 ),
               ),
@@ -193,8 +192,7 @@ class _HeatMapCard extends StatelessWidget {
                   margin: const EdgeInsets.only(right: 3),
                   decoration: BoxDecoration(
                     color: _HeatMapConfig.colorOf(cs, i),
-                    borderRadius:
-                        BorderRadius.circular(_HeatMapConfig.radius),
+                    borderRadius: BorderRadius.circular(_HeatMapConfig.radius),
                   ),
                 ),
               const SizedBox(width: 2),
@@ -218,8 +216,9 @@ class _HeatMapCard extends StatelessWidget {
     int currentStreak = 0;
     int thisWeekMessages = 0;
 
-    final todayWeekStart =
-        todayDate.subtract(Duration(days: todayDate.weekday - 1));
+    final todayWeekStart = todayDate.subtract(
+      Duration(days: todayDate.weekday - 1),
+    );
 
     // 按日期排序遍历，计算连续天数
     final sortedDates = heatData.keys.toList()..sort();
@@ -229,8 +228,7 @@ class _HeatMapCard extends StatelessWidget {
         totalMessages += count;
         activeDays++;
         // 本周消息
-        if (!date.isBefore(todayWeekStart) &&
-            !date.isAfter(todayDate)) {
+        if (!date.isBefore(todayWeekStart) && !date.isAfter(todayDate)) {
           thisWeekMessages += count;
         }
       }
@@ -378,11 +376,7 @@ class _StatItem extends StatelessWidget {
               ),
               Text(
                 label,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: cs.outline,
-                  height: 1.2,
-                ),
+                style: TextStyle(fontSize: 10, color: cs.outline, height: 1.2),
               ),
             ],
           ),
@@ -409,10 +403,7 @@ class _HeatMapGrid extends StatelessWidget {
     final today = DateTime.now();
 
     return CustomPaint(
-      size: Size(
-        _HeatMapConfig.gridWidth,
-        _HeatMapConfig.gridHeight,
-      ),
+      size: Size(_HeatMapConfig.gridWidth, _HeatMapConfig.gridHeight),
       painter: _HeatMapPainter(
         startDate: startDate,
         heatData: heatData,
@@ -469,8 +460,11 @@ class _HeatMapPainter extends CustomPainter {
         if (level == 0) {
           cellPaint.color = emptyColor;
         } else {
-          cellPaint.color =
-              Color.lerp(emptyColor, baseColor, _HeatMapConfig.tOf(level))!;
+          cellPaint.color = Color.lerp(
+            emptyColor,
+            baseColor,
+            _HeatMapConfig.tOf(level),
+          )!;
         }
         canvas.drawRRect(rect, cellPaint);
 
@@ -519,7 +513,9 @@ class _QuickStatsRow extends StatelessWidget {
 
     final totalSessions = state.sessions.length;
     final totalMessages = state.sessions.fold<int>(
-        0, (sum, s) => sum + s.messages.length);
+      0,
+      (sum, s) => sum + s.messages.length,
+    );
     final totalPersonas = state.personas.length;
     final totalGroups = state.groupChats.length;
 
@@ -652,14 +648,14 @@ class _TokenStatsCard extends StatelessWidget {
             child: SizedBox(
               height: 140,
               child: CustomPaint(
-              painter: _TokenBarChartPainter(
-                data: dailyData,
-                inputColor: cs.primary,
-                outputColor: cs.tertiary,
-                cachedColor: cs.secondary,
-                gridColor: cs.outlineVariant.withValues(alpha: 0.35),
-                textColor: cs.outline,
-              ),
+                painter: _TokenBarChartPainter(
+                  data: dailyData,
+                  inputColor: cs.primary,
+                  outputColor: cs.tertiary,
+                  cachedColor: cs.secondary,
+                  gridColor: cs.outlineVariant.withValues(alpha: 0.35),
+                  textColor: cs.outline,
+                ),
                 size: const Size(double.infinity, 140),
               ),
             ),
@@ -816,8 +812,9 @@ class _TokenStatsCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      _formatTokens(data.fold<int>(
-                          0, (sum, d) => sum + d.total)),
+                      _formatTokens(
+                        data.fold<int>(0, (sum, d) => sum + d.total),
+                      ),
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w800,
@@ -849,16 +846,19 @@ class _TokenStatsCard extends StatelessWidget {
       final key =
           '${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
       final match = records.firstWhere(
-        (r) => r.date ==
+        (r) =>
+            r.date ==
             '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}',
         orElse: () => DailyTokenUsage(date: key),
       );
-      result.add(_DayTokenData(
-        label: key,
-        input: match.inputTokens,
-        output: match.outputTokens,
-        cached: match.cachedTokens,
-      ));
+      result.add(
+        _DayTokenData(
+          label: key,
+          input: match.inputTokens,
+          output: match.outputTokens,
+          cached: match.cachedTokens,
+        ),
+      );
     }
     return result;
   }
@@ -934,10 +934,7 @@ class _TokenBarChartPainter extends CustomPainter {
         final d = data[i];
         final x = barGap + i * (barW + barGap);
         paint.color = gridColor.withValues(alpha: 0.15);
-        canvas.drawRect(
-          Rect.fromLTWH(x, chartH - 2, barW, 2),
-          paint,
-        );
+        canvas.drawRect(Rect.fromLTWH(x, chartH - 2, barW, 2), paint);
 
         final tp = TextPainter(
           text: TextSpan(
@@ -947,10 +944,7 @@ class _TokenBarChartPainter extends CustomPainter {
           textDirection: TextDirection.ltr,
         );
         tp.layout();
-        tp.paint(
-          canvas,
-          Offset(x + (barW - tp.width) / 2, chartH + 4),
-        );
+        tp.paint(canvas, Offset(x + (barW - tp.width) / 2, chartH + 4));
       }
       return;
     }
@@ -962,10 +956,7 @@ class _TokenBarChartPainter extends CustomPainter {
 
       if (d.total == 0) {
         paint.color = gridColor.withValues(alpha: 0.3);
-        canvas.drawRect(
-          Rect.fromLTWH(x, chartH - 4, barW, 4),
-          paint,
-        );
+        canvas.drawRect(Rect.fromLTWH(x, chartH - 4, barW, 4), paint);
       } else {
         final barH = (d.total / maxVal) * (chartH - 4);
         // 缓存是输入的子集，不重复计算：输入段拆为 freshInput + cached
@@ -985,18 +976,12 @@ class _TokenBarChartPainter extends CustomPainter {
         // 新输入段（中间）
         if (freshH > 0) {
           paint.color = inputColor;
-          canvas.drawRect(
-            Rect.fromLTWH(x, top + outputH, barW, freshH),
-            paint,
-          );
+          canvas.drawRect(Rect.fromLTWH(x, top + outputH, barW, freshH), paint);
         }
         // 输出段（顶部）
         if (outputH > 0) {
           paint.color = outputColor;
-          canvas.drawRect(
-            Rect.fromLTWH(x, top, barW, outputH),
-            paint,
-          );
+          canvas.drawRect(Rect.fromLTWH(x, top, barW, outputH), paint);
         }
       }
 
@@ -1009,16 +994,12 @@ class _TokenBarChartPainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       );
       tp.layout();
-      tp.paint(
-        canvas,
-        Offset(x + (barW - tp.width) / 2, chartH + 4),
-      );
+      tp.paint(canvas, Offset(x + (barW - tp.width) / 2, chartH + 4));
     }
   }
 
   @override
-  bool shouldRepaint(covariant _TokenBarChartPainter old) =>
-      old.data != data;
+  bool shouldRepaint(covariant _TokenBarChartPainter old) => old.data != data;
 }
 
 class _LegendDot extends StatelessWidget {
@@ -1070,10 +1051,7 @@ class _TokenValueLine extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          label,
-          style: TextStyle(fontSize: 12, color: cs.outline),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: cs.outline)),
         Text(
           _formatTokens(value),
           style: TextStyle(
@@ -1154,10 +1132,10 @@ class _MemoryDashboardCard extends StatelessWidget {
     final isMemoryEnabled = state.injectMemories;
 
     final total = state.memories.length;
-    final archived =
-        state.memories.where((m) => m.status == 'archived').length;
-    final activeCount =
-        state.memories.where((m) => m.status == 'active').length;
+    final archived = state.memories.where((m) => m.status == 'archived').length;
+    final activeCount = state.memories
+        .where((m) => m.status == 'active')
+        .length;
     final atomCount = state.memoryAtoms.length;
     final graphNodeCount = state.graphStore.nodeCount;
     final mergedCount = state.memories
@@ -1300,15 +1278,12 @@ class _MemoryDashboardCard extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: SizedBox(
                 height: 110,
-                child: CustomPaint(
-                  size: const Size(double.infinity, 110),
-                  painter: _MemoryTrendPainter(
-                    data: dailyTrend,
-                    lineColor: cs.primary,
-                    dotColor: cs.tertiary,
-                    textColor: cs.outline,
-                    gridColor: cs.outlineVariant.withValues(alpha: 0.35),
-                  ),
+                child: _AnimatedMemoryTrend(
+                  data: dailyTrend,
+                  lineColor: cs.primary,
+                  dotColor: cs.tertiary,
+                  textColor: cs.outline,
+                  gridColor: cs.outlineVariant.withValues(alpha: 0.35),
                 ),
               ),
             ),
@@ -1419,19 +1394,16 @@ class _MemoryDashboardCard extends StatelessWidget {
   }
 
   static String _atomTypeLabel(AtomType type) => switch (type) {
-        AtomType.factual => '事实',
-        AtomType.episodic => '情节',
-        AtomType.relational => '关系',
-        AtomType.preference => '偏好',
-        AtomType.planned => '计划',
-        AtomType.unknown => '未分类',
-      };
+    AtomType.factual => '事实',
+    AtomType.episodic => '情节',
+    AtomType.relational => '关系',
+    AtomType.preference => '偏好',
+    AtomType.planned => '计划',
+    AtomType.unknown => '未分类',
+  };
 
   void _pushMemoryPage(BuildContext context) {
-    Navigator.push(
-      context,
-      FastRoute(builder: (_) => const MemoryPage()),
-    );
+    Navigator.push(context, FastRoute(builder: (_) => const MemoryPage()));
   }
 
   /// 获取近7天每日新增记忆数
@@ -1459,7 +1431,6 @@ class _MemoryDashboardCard extends StatelessWidget {
 
     return result;
   }
-
 
   /// 获取记忆最多的 Top 10 会话列表
   List<_TopSessionItem> _getTop10Sessions(AppState state) {
@@ -1569,13 +1540,14 @@ class _DailyMemoryPoint {
   _DailyMemoryPoint({required this.label, required this.count});
 }
 
-/// 近7天记忆增长趋势折线图
+/// 近7天记忆增长趋势折线图（带入场进度：折线从左往右画出）
 class _MemoryTrendPainter extends CustomPainter {
   final List<_DailyMemoryPoint> data;
   final Color lineColor;
   final Color dotColor;
   final Color textColor;
   final Color gridColor;
+  final double progress; // 入场动画进度 0..1
 
   _MemoryTrendPainter({
     required this.data,
@@ -1583,6 +1555,7 @@ class _MemoryTrendPainter extends CustomPainter {
     required this.dotColor,
     required this.textColor,
     required this.gridColor,
+    this.progress = 1.0,
   });
 
   @override
@@ -1630,6 +1603,10 @@ class _MemoryTrendPainter extends CustomPainter {
       tp.paint(canvas, Offset(x - tp.width / 2, chartH + 6));
     }
 
+    // 入场：按进度从左往右揭示折线与圆点
+    final revealWidth = size.width * progress.clamp(0.0, 1.0);
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(0, 0, revealWidth, size.height));
     final path = Path()..moveTo(points.first.dx, points.first.dy);
     for (int i = 1; i < points.length; i++) {
       path.lineTo(points[i].dx, points[i].dy);
@@ -1652,14 +1629,80 @@ class _MemoryTrendPainter extends CustomPainter {
           textDirection: TextDirection.ltr,
         );
         tp.layout();
-        tp.paint(canvas, Offset(points[i].dx - tp.width / 2, points[i].dy - 12));
+        tp.paint(
+          canvas,
+          Offset(points[i].dx - tp.width / 2, points[i].dy - 12),
+        );
       }
     }
+    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant _MemoryTrendPainter old) =>
-      old.data != data || old.lineColor != lineColor;
+      old.data != data ||
+      old.lineColor != lineColor ||
+      old.progress != progress;
+}
+
+/// 趋势折线图入场动画壳：挂载时从左往右画出一次
+class _AnimatedMemoryTrend extends StatefulWidget {
+  final List<_DailyMemoryPoint> data;
+  final Color lineColor;
+  final Color dotColor;
+  final Color textColor;
+  final Color gridColor;
+
+  const _AnimatedMemoryTrend({
+    required this.data,
+    required this.lineColor,
+    required this.dotColor,
+    required this.textColor,
+    required this.gridColor,
+  });
+
+  @override
+  State<_AnimatedMemoryTrend> createState() => _AnimatedMemoryTrendState();
+}
+
+class _AnimatedMemoryTrendState extends State<_AnimatedMemoryTrend>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+  );
+  late final Animation<double> _progress = _controller
+      .drive(CurveTween(curve: Curves.easeOutCubic));
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _progress,
+      builder: (context, _) => CustomPaint(
+        size: const Size(double.infinity, 110),
+        painter: _MemoryTrendPainter(
+          data: widget.data,
+          lineColor: widget.lineColor,
+          dotColor: widget.dotColor,
+          textColor: widget.textColor,
+          gridColor: widget.gridColor,
+          progress: _progress.value,
+        ),
+      ),
+    );
+  }
 }
 
 /// 重要性 10 档竖向迷你柱状图：柱顶计数、底部档位标签，峰值档高亮
@@ -1701,8 +1744,7 @@ class _ImportanceColumnChart extends StatelessWidget {
                       child: Align(
                         alignment: Alignment.bottomCenter,
                         child: FractionallySizedBox(
-                          heightFactor:
-                              maxBin == 0 ? 0.0 : bins[i] / maxBin,
+                          heightFactor: maxBin == 0 ? 0.0 : bins[i] / maxBin,
                           // Container 无 child 时撑满约束（DecoratedBox 会收缩为 0 不可见）
                           child: Container(
                             decoration: BoxDecoration(
@@ -1737,8 +1779,8 @@ class _ImportanceColumnChart extends StatelessWidget {
     final base = tier >= 7
         ? cs.primary
         : tier >= 4
-            ? const Color(0xFFE7B24F)
-            : cs.outline.withValues(alpha: 0.5);
+        ? const Color(0xFFE7B24F)
+        : cs.outline.withValues(alpha: 0.5);
     return isPeak ? base : base.withValues(alpha: 0.55);
   }
 }
@@ -1757,12 +1799,11 @@ class _AtomTypeStackBar extends StatelessWidget {
     AtomType.planned: Color(0xFF9B8FD4),
   };
 
-  Color _colorFor(AtomType type, ColorScheme cs) =>
-      type == AtomType.factual
-          ? cs.primary
-          : type == AtomType.unknown
-              ? cs.outline
-              : _typeColors[type] ?? cs.secondary;
+  Color _colorFor(AtomType type, ColorScheme cs) => type == AtomType.factual
+      ? cs.primary
+      : type == AtomType.unknown
+      ? cs.outline
+      : _typeColors[type] ?? cs.secondary;
 
   @override
   Widget build(BuildContext context) {
@@ -1807,10 +1848,7 @@ class _AtomTypeStackBar extends StatelessWidget {
                   const SizedBox(width: 4),
                   Text(
                     '${_MemoryDashboardCard._atomTypeLabel(e.key)} ${e.value}',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: cs.onSurfaceVariant,
-                    ),
+                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -1821,8 +1859,9 @@ class _AtomTypeStackBar extends StatelessWidget {
   }
 }
 
-/// 记忆小指标框
-class _MemoryStatBox extends StatelessWidget {
+/// 记忆小指标框：可跳转的框（onTap 非空）右上角带跳转符号，
+/// 按压有回缩反馈
+class _MemoryStatBox extends StatefulWidget {
   final String label;
   final String value;
   final IconData icon;
@@ -1838,46 +1877,78 @@ class _MemoryStatBox extends StatelessWidget {
   });
 
   @override
+  State<_MemoryStatBox> createState() => _MemoryStatBoxState();
+}
+
+class _MemoryStatBoxState extends State<_MemoryStatBox> {
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
+    final tappable = widget.onTap != null;
     return GestureDetector(
-      onTap: onTap,
-      child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 14, color: color),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Theme.of(context).colorScheme.outline,
+      onTap: widget.onTap,
+      onTapDown: tappable ? (_) => setState(() => _pressed = true) : null,
+      onTapUp: tappable ? (_) => setState(() => _pressed = false) : null,
+      onTapCancel: tappable ? () => setState(() => _pressed = false) : null,
+      child: AnimatedScale(
+        scale: _pressed ? 0.94 : 1.0,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        child: Stack(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              decoration: BoxDecoration(
+                color: widget.color.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(widget.icon, size: 14, color: widget.color),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          widget.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 4),
+                  Text(
+                    widget.value,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: widget.color,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // 跳转符号：提示该框可点击跳转
+            if (tappable)
+              Positioned(
+                top: 5,
+                right: 6,
+                child: Icon(
+                  Icons.north_east_rounded,
+                  size: 11,
+                  color: widget.color.withValues(alpha: 0.55),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              color: color,
-            ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
@@ -1982,11 +2053,12 @@ class _InfoRow extends StatelessWidget {
       children: [
         Icon(icon, size: 16, color: cs.outline),
         const SizedBox(width: 8),
-        Text(label,
-            style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+        Text(label, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
         const Spacer(),
-        Text(value,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
       ],
     );
   }

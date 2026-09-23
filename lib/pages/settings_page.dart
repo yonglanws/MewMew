@@ -5,12 +5,14 @@ import '../state/app_state.dart';
 import '../utils/fast_route.dart';
 import '../utils/large_app_bar_title.dart';
 import 'api_config_page.dart';
+import 'chat_history_manager_page.dart';
 import 'memory_settings_page.dart';
 import 'message_debounce_settings_page.dart';
 import 'persona_page.dart';
+import 'prompt_injection_page.dart';
 import 'segmented_send_settings_page.dart';
 import 'sticker_management_page.dart';
-
+import 'world_book_page.dart';
 
 /// 设置页：按功能分组的列表
 class SettingsPage extends StatelessWidget {
@@ -82,23 +84,9 @@ class SettingsPage extends StatelessWidget {
                 _SettingTile(
                   icon: Icons.memory_outlined,
                   iconColor: cs.tertiary,
-                  title: '嵌入 API 配置（可选）',
+                  title: '嵌入 API 配置',
                   subtitle: '配置后启用语义检索；未配置时关键词与图谱检索仍可用',
                   onTap: () => _showEmbeddingApiSheet(context),
-                ),
-              ],
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: _Section(
-              title: '角色与对话',
-              children: [
-                _SettingTile(
-                  icon: Icons.face_outlined,
-                  iconColor: cs.tertiary,
-                  title: '人格设定',
-                  subtitle: '创建和编辑对话人格',
-                  onTap: () => _push(context, const PersonaPage()),
                 ),
                 _SettingTile(
                   icon: Icons.stream_outlined,
@@ -110,6 +98,27 @@ class SettingsPage extends StatelessWidget {
                     onChanged: (v) =>
                         context.read<AppState>().setStreamOutputEnabled(v),
                   ),
+                ),
+              ],
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: _Section(
+              title: '角色与对话',
+              children: [
+                _SettingTile(
+                  icon: Icons.face_outlined,
+                  iconColor: cs.tertiary,
+                  title: '角色卡',
+                  subtitle: '管理角色卡：外貌、性格、背景与对话风格',
+                  onTap: () => _push(context, const PersonaPage()),
+                ),
+                _SettingTile(
+                  icon: Icons.psychology_outlined,
+                  iconColor: cs.tertiary,
+                  title: '记忆系统',
+                  subtitle: '管理跨会话记忆与自动总结',
+                  onTap: () => _push(context, const MemorySettingsPage()),
                 ),
                 _SettingTile(
                   icon: Icons.splitscreen_outlined,
@@ -134,12 +143,26 @@ class SettingsPage extends StatelessWidget {
                   onTap: () =>
                       _push(context, const MessageDebounceSettingsPage()),
                 ),
+              ],
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: _Section(
+              title: '提示词',
+              children: [
                 _SettingTile(
-                  icon: Icons.psychology_outlined,
-                  iconColor: cs.tertiary,
-                  title: '记忆系统',
-                  subtitle: '管理跨会话记忆与自动总结',
-                  onTap: () => _push(context, const MemorySettingsPage()),
+                  icon: Icons.quickreply_outlined,
+                  iconColor: cs.primary,
+                  title: '提示词注入',
+                  subtitle: '上下文感知、私聊/群聊风格注入与模式注入',
+                  onTap: () => _push(context, const PromptInjectionPage()),
+                ),
+                _SettingTile(
+                  icon: Icons.auto_stories_outlined,
+                  iconColor: cs.secondary,
+                  title: '世界书',
+                  subtitle: '关键词触发的世界观与背景设定库',
+                  onTap: () => _push(context, const WorldBookPage()),
                 ),
               ],
             ),
@@ -154,6 +177,14 @@ class SettingsPage extends StatelessWidget {
                   title: '清空聊天记录',
                   subtitle: '删除所有会话，此操作不可撤销',
                   onTap: () => _confirmClearSessions(context),
+                ),
+                _SettingTile(
+                  icon: Icons.fact_check_outlined,
+                  iconColor: cs.secondary,
+                  title: '聊天记录管理',
+                  subtitle: '按会话选择部分或全部聊天记录删除',
+                  onTap: () =>
+                      _push(context, const ChatHistoryManagerPage()),
                 ),
               ],
             ),

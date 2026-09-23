@@ -13,11 +13,12 @@ class ArchivedMemoriesPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final cs = Theme.of(context).colorScheme;
-    final archived = state.memories
-        .where((m) => m.status == 'archived')
-        .toList()
-      ..sort((a, b) =>
-          (b.archivedAt ?? b.createdAt).compareTo(a.archivedAt ?? a.createdAt));
+    final archived =
+        state.memories.where((m) => m.status == 'archived').toList()..sort(
+          (a, b) => (b.archivedAt ?? b.createdAt).compareTo(
+            a.archivedAt ?? a.createdAt,
+          ),
+        );
 
     return Scaffold(
       appBar: AppBar(title: Text('已归档记忆（${archived.length}）')),
@@ -99,18 +100,18 @@ class _ArchivedCard extends StatelessWidget {
           const SizedBox(height: 8),
           Row(
             children: [
-              Icon(
-                Icons.archive_outlined,
-                size: 12,
-                color: cs.outline,
-              ),
+              Icon(Icons.archive_outlined, size: 12, color: cs.outline),
               const SizedBox(width: 4),
-              Text(
-                '归档于 ${DateFormat('yyyy-MM-dd HH:mm').format(archivedAt)} · '
-                    '重要性 ${memory.importance.toStringAsFixed(2)}',
-                style: TextStyle(fontSize: 11, color: cs.outline),
+              // 元信息占满剩余宽度并省略，避免把右侧按钮挤出屏幕（溢出修复）
+              Expanded(
+                child: Text(
+                  '归档于 ${DateFormat('yyyy-MM-dd HH:mm').format(archivedAt)} · '
+                  '重要性 ${memory.importance.toStringAsFixed(2)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: cs.outline),
+                ),
               ),
-              const Spacer(),
               TextButton.icon(
                 onPressed: () => context
                     .read<AppState>()
@@ -119,6 +120,7 @@ class _ArchivedCard extends StatelessWidget {
                 label: const Text('恢复'),
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
                 ),
               ),
               TextButton.icon(
@@ -128,9 +130,7 @@ class _ArchivedCard extends StatelessWidget {
                     context: context,
                     builder: (ctx) => AlertDialog(
                       title: const Text('彻底删除'),
-                      content: const Text(
-                        '删除后该记忆及其原子、图谱痕迹将一并移除，无法恢复。',
-                      ),
+                      content: const Text('删除后该记忆及其原子、图谱痕迹将一并移除，无法恢复。'),
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.pop(ctx),
@@ -151,6 +151,7 @@ class _ArchivedCard extends StatelessWidget {
                 label: Text('删除', style: TextStyle(color: cs.error)),
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
                 ),
               ),
             ],

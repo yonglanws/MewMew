@@ -76,7 +76,10 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
     final store = state.graphStore;
     var memoryIds = state.memories.map((m) => m.id).toSet();
     if (!_fullGraph) {
-      memoryIds = state.memories.take(_overviewMemoryLimit).map((m) => m.id).toSet();
+      memoryIds = state.memories
+          .take(_overviewMemoryLimit)
+          .map((m) => m.id)
+          .toSet();
     }
 
     final entryKeys = <String>{};
@@ -110,10 +113,15 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
       nodeKeys = nodeKeys.take(_overviewNodeCap).toSet();
     }
 
-    var edges = store.edges.values
-        .where((e) => nodeKeys.contains(e.sourceKey) && nodeKeys.contains(e.targetKey))
-        .toList()
-      ..sort((a, b) => b.weight.compareTo(a.weight));
+    var edges =
+        store.edges.values
+            .where(
+              (e) =>
+                  nodeKeys.contains(e.sourceKey) &&
+                  nodeKeys.contains(e.targetKey),
+            )
+            .toList()
+          ..sort((a, b) => b.weight.compareTo(a.weight));
     if (!_fullGraph && edges.length > _overviewEdgeCap) {
       edges = edges.sublist(0, _overviewEdgeCap);
     }
@@ -132,27 +140,35 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
       final entryCount = nodeKeyToEntries[key] ?? 0;
       final d = degree[key] ?? 0;
       final weight = entryCount + memoryCount * 0.75 + d * 0.35;
-      nodes.add(_GraphNodeView(
-        node: node,
-        memoryCount: memoryCount,
-        entryCount: entryCount,
-        degree: d,
-        weight: weight,
-      ));
+      nodes.add(
+        _GraphNodeView(
+          node: node,
+          memoryCount: memoryCount,
+          entryCount: entryCount,
+          degree: d,
+          weight: weight,
+        ),
+      );
     }
 
     return _GraphData(
       nodes: nodes,
       edges: edges
-          .map((e) => LayoutEdgeInput(
-                id: e.semanticKey,
-                source: e.sourceKey,
-                target: e.targetKey,
-                weight: e.weight,
-              ))
+          .map(
+            (e) => LayoutEdgeInput(
+              id: e.semanticKey,
+              source: e.sourceKey,
+              target: e.targetKey,
+              weight: e.weight,
+            ),
+          )
           .toList(),
       memoryCount: memoryIds.length,
-      sessionCount: state.memories.map((m) => m.sessionId).whereType<String>().toSet().length,
+      sessionCount: state.memories
+          .map((m) => m.sessionId)
+          .whereType<String>()
+          .toSet()
+          .length,
     );
   }
 
@@ -171,13 +187,18 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
       return;
     }
     final inputs = data.nodes
-        .map((n) => LayoutNodeInput(
-              id: n.node.key,
-              radius: nodeWorldRadius(weight: n.weight, memoryCount: n.memoryCount),
+        .map(
+          (n) => LayoutNodeInput(
+            id: n.node.key,
+            radius: nodeWorldRadius(
               weight: n.weight,
               memoryCount: n.memoryCount,
-              degree: n.degree,
-            ))
+            ),
+            weight: n.weight,
+            memoryCount: n.memoryCount,
+            degree: n.degree,
+          ),
+        )
         .toList();
     final job = computeGraphLayoutAsync(inputs, data.edges);
     _layoutJob = job;
@@ -306,8 +327,10 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
       vsync: this,
       duration: const Duration(milliseconds: 260),
     );
-    _cameraCurve ??= CurvedAnimation(parent: controller, curve: Curves.easeOutCubic)
-      ..addListener(_tickCamera);
+    _cameraCurve ??= CurvedAnimation(
+      parent: controller,
+      curve: Curves.easeOutCubic,
+    )..addListener(_tickCamera);
     _cameraFrom = _matrix.clone();
     _cameraTo = target.clone();
     controller
@@ -329,7 +352,8 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
   /// 相机矩阵插值：平移与缩放分量各自线性过渡（本页矩阵只含平移+均匀缩放）
   static Matrix4 _lerpCameraMatrix(Matrix4 a, Matrix4 b, double t) {
     final scale =
-        a.getMaxScaleOnAxis() + (b.getMaxScaleOnAxis() - a.getMaxScaleOnAxis()) * t;
+        a.getMaxScaleOnAxis() +
+        (b.getMaxScaleOnAxis() - a.getMaxScaleOnAxis()) * t;
     final tx = a.storage[12] + (b.storage[12] - a.storage[12]) * t;
     final ty = a.storage[13] + (b.storage[13] - a.storage[13]) * t;
     return Matrix4.identity()
@@ -387,7 +411,8 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
   void _onTapUp(TapUpDetails details, _GraphData data) {
     final pos = details.localPosition;
     final now = DateTime.now();
-    final isDoubleTap = _lastTapTime != null &&
+    final isDoubleTap =
+        _lastTapTime != null &&
         _lastTapPosition != null &&
         now.difference(_lastTapTime!).inMilliseconds < 300 &&
         (pos - _lastTapPosition!).distance < 24;
@@ -478,9 +503,21 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
                   onTap: () => setState(() => _typeFilter = null),
                 ),
                 for (final type in [
-                  (GraphNodeType.person, '人物', kGraphTypeColors[GraphNodeType.person]!),
-                  (GraphNodeType.topic, '主题', kGraphTypeColors[GraphNodeType.topic]!),
-                  (GraphNodeType.fact, '事实', kGraphTypeColors[GraphNodeType.fact]!),
+                  (
+                    GraphNodeType.person,
+                    '人物',
+                    kGraphTypeColors[GraphNodeType.person]!,
+                  ),
+                  (
+                    GraphNodeType.topic,
+                    '主题',
+                    kGraphTypeColors[GraphNodeType.topic]!,
+                  ),
+                  (
+                    GraphNodeType.fact,
+                    '事实',
+                    kGraphTypeColors[GraphNodeType.fact]!,
+                  ),
                 ])
                   _TypeChip(
                     label: type.$2,
@@ -501,8 +538,9 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
               decoration: BoxDecoration(
                 color: cs.surfaceContainerLowest,
                 borderRadius: BorderRadius.circular(20),
-                border:
-                    Border.all(color: cs.outlineVariant.withValues(alpha: 0.5)),
+                border: Border.all(
+                  color: cs.outlineVariant.withValues(alpha: 0.5),
+                ),
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(20),
@@ -518,10 +556,7 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
                       )
                     else if (_layoutJob != null || _positions == null)
                       Center(
-                        child: _StatusPill(
-                          text: '正在准备图谱布局…',
-                          color: cs,
-                        ),
+                        child: _StatusPill(text: '正在准备图谱布局…', color: cs),
                       )
                     else
                       LayoutBuilder(
@@ -588,10 +623,9 @@ class _MemoryGraphPageState extends State<MemoryGraphPage>
     );
   }
 
-  static String storeEmptyHint(AppState state) =>
-      state.graphStore.nodes.isEmpty
-          ? '暂无图谱数据\n对话产生关键事实后会自动出现在这里'
-          : '没有符合筛选的节点';
+  static String storeEmptyHint(AppState state) => state.graphStore.nodes.isEmpty
+      ? '暂无图谱数据\n对话产生关键事实后会自动出现在这里'
+      : '没有符合筛选的节点';
 }
 
 // ---------- 数据视图 ----------
@@ -664,10 +698,13 @@ class _TypeChip extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
-            color: selected ? color.withValues(alpha: 0.18) : Colors.transparent,
+            color: selected
+                ? color.withValues(alpha: 0.18)
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(16),
-            border:
-                Border.all(color: selected ? color : color.withValues(alpha: 0.35)),
+            border: Border.all(
+              color: selected ? color : color.withValues(alpha: 0.35),
+            ),
           ),
           child: Text(
             label,
@@ -777,7 +814,9 @@ class _Legend extends StatelessWidget {
                     width: 8,
                     height: 8,
                     decoration: BoxDecoration(
-                        color: kGraphTypeColors[chip.key], shape: BoxShape.circle),
+                      color: kGraphTypeColors[chip.key],
+                      shape: BoxShape.circle,
+                    ),
                   ),
                   const SizedBox(width: 4),
                   Text(
@@ -809,11 +848,11 @@ class _Legend extends StatelessWidget {
   }
 
   static String _typeLabel(GraphNodeType type) => switch (type) {
-        GraphNodeType.person => '人物',
-        GraphNodeType.topic => '主题',
-        GraphNodeType.fact => '事实',
-        GraphNodeType.summary => '摘要',
-      };
+    GraphNodeType.person => '人物',
+    GraphNodeType.topic => '主题',
+    GraphNodeType.fact => '事实',
+    GraphNodeType.summary => '摘要',
+  };
 }
 
 // ---------- 画笔 ----------
@@ -839,10 +878,10 @@ class _GraphPainter extends CustomPainter {
   }
 
   double _radiusOf(_GraphNodeView node) => nodeWorldRadius(
-        weight: node.weight,
-        memoryCount: node.memoryCount,
-        selected: node.node.key == selectedKey,
-      );
+    weight: node.weight,
+    memoryCount: node.memoryCount,
+    selected: node.node.key == selectedKey,
+  );
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -886,8 +925,7 @@ class _GraphPainter extends CustomPainter {
       final nx = len > 0 ? -dy / len : 1.0;
       final ny = len > 0 ? dx / len : 0.0;
       final control = mid + Offset(nx * bend, ny * bend);
-      final weightBonus =
-          math.sqrt(e.weight) / 3.6 * (active ? 0.35 : 0.8);
+      final weightBonus = math.sqrt(e.weight) / 3.6 * (active ? 0.35 : 0.8);
       edgePaint.strokeWidth = (active ? 1.2 : 0.7) + weightBonus;
       edgePaint.color = scheme.outline.withValues(alpha: active ? 0.55 : 0.22);
       final path = Path()
@@ -920,8 +958,8 @@ class _GraphPainter extends CustomPainter {
       final haloBase = isSelected
           ? 8.0
           : prominent
-              ? 2.4
-              : 0.0;
+          ? 2.4
+          : 0.0;
       if (haloBase > 0) {
         canvas.drawCircle(
           center,
@@ -973,8 +1011,7 @@ class _GraphPainter extends CustomPainter {
   void _paintDotGrid(Canvas canvas, double scale, Size size) {
     const dotRadius = 0.75;
     final step = (30 * scale).clamp(22.0, 42.0);
-    final paint = Paint()
-      ..color = scheme.outline.withValues(alpha: 0.13);
+    final paint = Paint()..color = scheme.outline.withValues(alpha: 0.13);
     // 只画可视区域内的点：把屏幕范围换算成世界范围再取整
     final storage = matrix.storage;
     final worldLeft = -storage[12] / scale;
@@ -1006,8 +1043,11 @@ class _GraphPainter extends CustomPainter {
         entryCount: node.entryCount,
         weight: node.weight,
       );
-      final prominent =
-          isProminentNode(degree: node.degree, memoryCount: node.memoryCount, labelScore: labelScore);
+      final prominent = isProminentNode(
+        degree: node.degree,
+        memoryCount: node.memoryCount,
+        labelScore: labelScore,
+      );
       final show = shouldShowLabel(
         scale: scale,
         selected: node.node.key == selectedKey,
@@ -1016,7 +1056,8 @@ class _GraphPainter extends CustomPainter {
         degree: node.degree,
       );
       if (!show) continue;
-      final priority = (node.node.key == selectedKey ? 2 : 0) +
+      final priority =
+          (node.node.key == selectedKey ? 2 : 0) +
           (prominent ? 1 : 0) +
           labelScore / 1000;
       candidates.add((node, priority));
@@ -1125,16 +1166,17 @@ class _NodeDetailSheet extends StatelessWidget {
     final store = state.graphStore;
     final color = kGraphTypeColors[node.node.type] ?? cs.primary;
     final links = store.edges.values
-        .where((e) => e.sourceKey == node.node.key || e.targetKey == node.node.key)
+        .where(
+          (e) => e.sourceKey == node.node.key || e.targetKey == node.node.key,
+        )
         .toList();
     final memoryIds = store.entries.values
         .where((e) => e.nodeKeys.contains(node.node.key))
         .map((e) => e.sourceMemoryId)
         .toSet();
-    final memories = state.memories
-        .where((m) => memoryIds.contains(m.id))
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final memories =
+        state.memories.where((m) => memoryIds.contains(m.id)).toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     return SafeArea(
       child: ConstrainedBox(
@@ -1149,8 +1191,10 @@ class _NodeDetailSheet extends StatelessWidget {
               children: [
                 // 类型徽章：类型色软底
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: 0.14),
                     borderRadius: BorderRadius.circular(12),
@@ -1161,8 +1205,10 @@ class _NodeDetailSheet extends StatelessWidget {
                       Container(
                         width: 8,
                         height: 8,
-                        decoration:
-                            BoxDecoration(color: color, shape: BoxShape.circle),
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                        ),
                       ),
                       const SizedBox(width: 6),
                       Text(
@@ -1226,13 +1272,17 @@ class _NodeDetailSheet extends StatelessWidget {
                 );
               }),
             const SizedBox(height: 12),
-            Text('关联记忆 ${memories.length}',
-                style: Theme.of(context).textTheme.labelLarge),
+            Text(
+              '关联记忆 ${memories.length}',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
             const SizedBox(height: 6),
             if (memories.isEmpty)
               Text('没有仍保留的关联记忆', style: TextStyle(color: cs.outline))
             else
-              ...memories.take(8).map(
+              ...memories
+                  .take(8)
+                  .map(
                     (m) => Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.all(12),
@@ -1247,17 +1297,13 @@ class _NodeDetailSheet extends StatelessWidget {
                             m.displayContent,
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
-                            style:
-                                const TextStyle(fontSize: 13, height: 1.5),
+                            style: const TextStyle(fontSize: 13, height: 1.5),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             '重要性 ${m.importance.toStringAsFixed(2)} · '
                             '${m.createdAt.month}-${m.createdAt.day}',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: cs.outline,
-                            ),
+                            style: TextStyle(fontSize: 11, color: cs.outline),
                           ),
                         ],
                       ),
@@ -1270,9 +1316,9 @@ class _NodeDetailSheet extends StatelessWidget {
   }
 
   static String _typeLabel(GraphNodeType type) => switch (type) {
-        GraphNodeType.person => '人物',
-        GraphNodeType.topic => '主题',
-        GraphNodeType.fact => '事实',
-        GraphNodeType.summary => '摘要',
-      };
+    GraphNodeType.person => '人物',
+    GraphNodeType.topic => '主题',
+    GraphNodeType.fact => '事实',
+    GraphNodeType.summary => '摘要',
+  };
 }

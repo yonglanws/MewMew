@@ -486,6 +486,7 @@ class _MemoryPageState extends State<MemoryPage> {
         }
         return false;
       }
+
       list = list.where(matches).toList();
     }
     switch (_sortBy) {
@@ -593,7 +594,9 @@ class _MemoryPageState extends State<MemoryPage> {
             horizontal: 20,
             vertical: 32,
           ),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: 560,
@@ -610,8 +613,8 @@ class _MemoryPageState extends State<MemoryPage> {
                       Text(
                         memory == null
                             ? (persona != null
-                                ? '为「${persona.name}」添加记忆'
-                                : '添加通用记忆')
+                                  ? '为「${persona.name}」添加记忆'
+                                  : '添加通用记忆')
                             : '编辑记忆',
                         style: Theme.of(ctx).textTheme.titleMedium,
                       ),
@@ -630,8 +633,7 @@ class _MemoryPageState extends State<MemoryPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('记忆内容',
-                            style: Theme.of(ctx).textTheme.labelLarge),
+                        Text('记忆内容', style: Theme.of(ctx).textTheme.labelLarge),
                         const SizedBox(height: 6),
                         TextField(
                           controller: contentCtrl,
@@ -651,8 +653,10 @@ class _MemoryPageState extends State<MemoryPage> {
                           onChanged: (list) => topics = list,
                         ),
                         const SizedBox(height: 14),
-                        Text('关键事实（每行一条，用于生成记忆原子）',
-                            style: Theme.of(ctx).textTheme.labelLarge),
+                        Text(
+                          '关键事实（每行一条，用于生成记忆原子）',
+                          style: Theme.of(ctx).textTheme.labelLarge,
+                        ),
                         const SizedBox(height: 6),
                         TextField(
                           controller: factsCtrl,
@@ -666,8 +670,10 @@ class _MemoryPageState extends State<MemoryPage> {
                         const SizedBox(height: 14),
                         Row(
                           children: [
-                            Text('重要性',
-                                style: Theme.of(ctx).textTheme.labelLarge),
+                            Text(
+                              '重要性',
+                              style: Theme.of(ctx).textTheme.labelLarge,
+                            ),
                             Expanded(
                               child: Slider(
                                 value: importance,
@@ -704,9 +710,10 @@ class _MemoryPageState extends State<MemoryPage> {
                       if (memory != null)
                         TextButton.icon(
                           onPressed: () {
-                            context
-                                .read<AppState>()
-                                .setMemoryArchived(memory.id, !isArchived);
+                            context.read<AppState>().setMemoryArchived(
+                              memory.id,
+                              !isArchived,
+                            );
                             Navigator.pop(ctx);
                           },
                           icon: Icon(
@@ -834,13 +841,10 @@ class _TopicsEditorState extends State<_TopicsEditor> {
                 for (final topic in _topics)
                   InputChip(
                     label: Text(topic),
-                    labelPadding:
-                        const EdgeInsets.symmetric(horizontal: 4),
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 4),
                     visualDensity: VisualDensity.compact,
-                    materialTapTargetSize:
-                        MaterialTapTargetSize.shrinkWrap,
-                    deleteIcon:
-                        const Icon(Icons.close, size: 16),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    deleteIcon: const Icon(Icons.close, size: 16),
                     onDeleted: () => _remove(topic),
                   ),
               ],
@@ -858,12 +862,10 @@ class _TopicsEditorState extends State<_TopicsEditor> {
           },
           decoration: InputDecoration(
             isDense: true,
-            hintText:
-                _topics.isEmpty ? '如：宠物、饮食偏好（回车添加）' : '添加主题…',
+            hintText: _topics.isEmpty ? '如：宠物、饮食偏好（回车添加）' : '添加主题…',
             border: const OutlineInputBorder(),
             suffixIcon: IconButton(
-              icon: Icon(Icons.add_circle_outline,
-                  size: 20, color: cs.primary),
+              icon: Icon(Icons.add_circle_outline, size: 20, color: cs.primary),
               tooltip: '添加',
               onPressed: () {
                 if (_ctrl.text.trim().isEmpty) return;
@@ -1480,11 +1482,7 @@ class _ArchivedSectionState extends State<_ArchivedSection> {
         onExpansionChanged: (v) => setState(() => _expanded = v),
         tilePadding: const EdgeInsets.symmetric(horizontal: 16),
         childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-        leading: Icon(
-          Icons.archive_outlined,
-          size: 20,
-          color: cs.outline,
-        ),
+        leading: Icon(Icons.archive_outlined, size: 20, color: cs.outline),
         title: Text(
           '已归档记忆',
           style: TextStyle(
@@ -1528,6 +1526,10 @@ class _ArchivedSectionState extends State<_ArchivedSection> {
 // 记忆卡片
 // ──────────────────────────────────────────────
 
+/// 单条记忆卡片（重写版）：正文是主角——
+/// 顶行「来源徽章 + 会话 + 时间」、正文（关键词高亮，最多 4 行）、
+/// 主题芯片行、底行「重要性条 + 热度 + 合并溯源 + 删除」。
+/// 去掉了旧版塞满十来个裸图标标签的信息 Wrap，信息分层呈现。
 class _MemoryCard extends StatelessWidget {
   final MemoryEntry memory;
   final String? sessionLabel;
@@ -1553,164 +1555,214 @@ class _MemoryCard extends StatelessWidget {
         : isSummary
         ? cs.tertiary
         : cs.secondary;
-    final sourceLabel = isAuto
-        ? 'AI'
-        : isSummary
-        ? '总结'
-        : '手动';
+    final sourceLabel = isAuto ? 'AI' : isSummary ? '总结' : '手动';
     final isArchived = memory.status == 'archived';
     final isMerged = memory.consolidatedFrom.isNotEmpty;
+    final showTopics = memory.topics.take(3).toList();
 
     return Material(
       color: cs.surface,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(16),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: DecoratedBox(
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
           decoration: BoxDecoration(
-            border: Border(
-              left: BorderSide(width: 3, color: sourceColor),
-              top: BorderSide(
-                width: 1,
-                color: cs.outlineVariant.withValues(alpha: 0.4),
-              ),
-              right: BorderSide(
-                width: 1,
-                color: cs.outlineVariant.withValues(alpha: 0.4),
-              ),
-              bottom: BorderSide(
-                width: 1,
-                color: cs.outlineVariant.withValues(alpha: 0.4),
-              ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: cs.outlineVariant.withValues(alpha: 0.4),
             ),
           ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 内容
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 11, 8, 11),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 内容文本（支持关键词高亮）
-                      _HighlightedText(
-                        text: memory.displayContent,
-                        keyword: keyword,
-                        baseStyle: TextStyle(
-                          fontSize: 14,
-                          height: 1.55,
-                          color: isArchived
-                              ? cs.onSurface.withValues(alpha: 0.5)
-                              : cs.onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      // 元信息行
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          _MetaTag(
-                            icon: isAuto
-                                ? Icons.auto_awesome
-                                : isSummary
-                                ? Icons.summarize_outlined
-                                : Icons.edit_note,
-                            text: sourceLabel,
-                            color: sourceColor,
-                          ),
-                          if (sessionLabel != null)
-                            _MetaTag(
-                              icon: Icons.bookmark_outline,
-                              text: sessionLabel!,
-                              color: cs.onSurfaceVariant,
-                            ),
-                          // 重要性（权重）
-                          _ImportanceTag(importance: memory.importance),
-                          // 热度（检索次数）
-                          if (memory.accessCount > 0)
-                            _MetaTag(
-                              icon: Icons.local_fire_department_outlined,
-                              text: '${memory.accessCount}',
-                              color: memory.accessCount >= 5
-                                  ? Colors.orange
-                                  : cs.onSurfaceVariant,
-                            ),
-                          _MetaTag(
-                            icon: Icons.schedule,
-                            text: DateFormat(
-                              'MM-dd HH:mm',
-                            ).format(memory.createdAt),
-                            color: cs.onSurfaceVariant.withValues(alpha: 0.7),
-                          ),
-                          // 主题徽章（最多 2 个）
-                          for (final topic in memory.topics.take(2))
-                            _MetaTag(
-                              icon: Icons.tag,
-                              text: topic,
-                              color: cs.tertiary,
-                            ),
-                          // 情感徽章
-                          if (memory.sentiment != null &&
-                              memory.sentiment != 'neutral')
-                            _MetaTag(
-                              icon: memory.sentiment == 'positive'
-                                  ? Icons.sentiment_satisfied_alt
-                                  : Icons.sentiment_dissatisfied,
-                              text: memory.sentiment == 'positive'
-                                  ? '积极'
-                                  : '消极',
-                              color: memory.sentiment == 'positive'
-                                  ? Colors.green
-                                  : Colors.redAccent,
-                            ),
-                          // 原子类型徽章
-                          if (memory.atomTypes.isNotEmpty)
-                            _MetaTag(
-                              icon: Icons.scatter_plot_outlined,
-                              text:
-                                  '${memory.atomTypes.length} 类原子',
-                              color: cs.secondary,
-                            ),
-                          if (isMerged)
-                            _MetaTag(
-                              icon: Icons.merge_type_outlined,
-                              text: '合并自 ${memory.consolidatedFrom.length} 条',
-                              color: cs.primary,
-                            ),
-                          if (isArchived)
-                            _MetaTag(
-                              icon: Icons.archive_outlined,
-                              text: '已归档',
-                              color: cs.outline,
-                            ),
-                        ],
-                      ),
-                    ],
+              // —— 顶行：来源徽章 · 会话 · 时间 ——
+              Row(
+                children: [
+                  _Badge(
+                    icon: isAuto
+                        ? Icons.auto_awesome
+                        : isSummary
+                        ? Icons.summarize_outlined
+                        : Icons.edit_note,
+                    text: sourceLabel,
+                    color: sourceColor,
                   ),
-                ),
-              ),
-              // 右侧删除按钮
-              Material(
-                color: Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
-                child: InkWell(
-                  onTap: onDelete,
-                  borderRadius: BorderRadius.circular(6),
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    child: Icon(
-                      Icons.close_rounded,
-                      size: 16,
-                      color: cs.onSurfaceVariant.withValues(alpha: 0.5),
+                  if (isArchived) ...[
+                    const SizedBox(width: 6),
+                    _Badge(
+                      icon: Icons.archive_outlined,
+                      text: '已归档',
+                      color: cs.outline,
+                    ),
+                  ],
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      sessionLabel ?? '',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: cs.onSurfaceVariant.withValues(alpha: 0.8),
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  Text(
+                    DateFormat('MM-dd HH:mm').format(memory.createdAt),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: cs.outline,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // —— 正文（关键词高亮） ——
+              _HighlightedText(
+                text: memory.displayContent,
+                keyword: keyword,
+                baseStyle: TextStyle(
+                  fontSize: 14.5,
+                  height: 1.55,
+                  fontWeight: FontWeight.w500,
+                  color: isArchived
+                      ? cs.onSurface.withValues(alpha: 0.5)
+                      : cs.onSurface,
                 ),
+                maxLines: 4,
+              ),
+              // —— 关键事实（最多 2 条，帮助一眼看懂这条记住了什么） ——
+              if (!isArchived && memory.keyFacts.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                for (final fact in memory.keyFacts.take(2))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6.5),
+                          child: Container(
+                            width: 4,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: cs.outline.withValues(alpha: 0.8),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            fact,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.4,
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+              // —— 主题芯片行 ——
+              if (showTopics.isNotEmpty || memory.sentiment != null) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    for (final topic in showTopics)
+                      _TopicChip(text: topic, color: cs.tertiary),
+                    if (memory.topics.length > showTopics.length)
+                      Text(
+                        '+${memory.topics.length - showTopics.length}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: cs.onSurfaceVariant.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    if (memory.sentiment != null &&
+                        memory.sentiment != 'neutral')
+                      _Badge(
+                        icon: memory.sentiment == 'positive'
+                            ? Icons.sentiment_satisfied_alt
+                            : Icons.sentiment_dissatisfied,
+                        text: memory.sentiment == 'positive' ? '积极' : '消极',
+                        color: memory.sentiment == 'positive'
+                            ? const Color(0xFF43A047)
+                            : const Color(0xFFE53935),
+                      ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 10),
+              // —— 底行：重要性条 · 热度 · 溯源 · 删除 ——
+              Row(
+                children: [
+                  _ImportanceBar(importance: memory.importance),
+                  const SizedBox(width: 12),
+                  if (memory.accessCount > 0) ...[
+                    Icon(
+                      Icons.local_fire_department_outlined,
+                      size: 12,
+                      color: memory.accessCount >= 5
+                          ? Colors.orange
+                          : cs.onSurfaceVariant.withValues(alpha: 0.6),
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      '${memory.accessCount}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: cs.onSurfaceVariant,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                  if (isMerged) ...[
+                    Icon(
+                      Icons.merge_type_outlined,
+                      size: 12,
+                      color: cs.primary.withValues(alpha: 0.8),
+                    ),
+                    const SizedBox(width: 3),
+                    Text(
+                      '合并 ${memory.consolidatedFrom.length}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: cs.primary.withValues(alpha: 0.8),
+                      ),
+                    ),
+                  ],
+                  const Spacer(),
+                  Material(
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      onTap: onDelete,
+                      borderRadius: BorderRadius.circular(14),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(
+                          Icons.close_rounded,
+                          size: 15,
+                          color: cs.onSurfaceVariant.withValues(alpha: 0.45),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1720,62 +1772,131 @@ class _MemoryCard extends StatelessWidget {
   }
 }
 
-class _MetaTag extends StatelessWidget {
+/// 带底色的小徽章：图标 + 文字的着色胶囊
+class _Badge extends StatelessWidget {
   final IconData icon;
   final String text;
   final Color color;
 
-  const _MetaTag({required this.icon, required this.text, required this.color});
+  const _Badge({required this.icon, required this.text, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 11, color: color),
-        const SizedBox(width: 3),
-        Text(text, style: TextStyle(fontSize: 11, color: color)),
-      ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        color: color.withValues(alpha: 0.12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: color),
+          const SizedBox(width: 3),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-/// 重要性标签：显示权重数值 + 颜色编码
-class _ImportanceTag extends StatelessWidget {
-  final double importance;
-  const _ImportanceTag({required this.importance});
+/// 主题芯片
+class _TopicChip extends StatelessWidget {
+  final String text;
+  final Color color;
+
+  const _TopicChip({required this.text, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    // 根据重要性等级着色
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.tag, size: 10, color: color),
+          const SizedBox(width: 2),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 11,
+              color: color,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 重要性：迷你进度条 + 数值，颜色随档位变化
+class _ImportanceBar extends StatelessWidget {
+  final double importance;
+  const _ImportanceBar({required this.importance});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final Color color;
-    final IconData icon;
     if (importance >= 0.75) {
       color = const Color(0xFFE53935); // 红色：高重要性
-      icon = Icons.priority_high_rounded;
     } else if (importance >= 0.5) {
       color = const Color(0xFFFFA726); // 琥珀色：中高
-      icon = Icons.fitness_center_rounded;
     } else if (importance >= 0.25) {
       color = const Color(0xFF42A5F5); // 蓝色：中
-      icon = Icons.fitness_center_rounded;
     } else {
-      color = Theme.of(
-        context,
-      ).colorScheme.onSurfaceVariant.withValues(alpha: 0.5);
-      icon = Icons.fitness_center_outlined;
+      color = cs.onSurfaceVariant.withValues(alpha: 0.5);
     }
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 11, color: color),
-        const SizedBox(width: 3),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(2),
+          child: SizedBox(
+            width: 56,
+            height: 4,
+            child: Stack(
+              children: [
+                ColoredBox(
+                  color: cs.surfaceContainerHighest,
+                  child: const SizedBox.expand(),
+                ),
+                // 首次出现时从 0 生长到目标值（一次性动画）
+                TweenAnimationBuilder<double>(
+                  tween: Tween(begin: 0, end: importance.clamp(0.04, 1.0)),
+                  duration: const Duration(milliseconds: 450),
+                  curve: Curves.easeOutCubic,
+                  builder: (_, value, __) => FractionallySizedBox(
+                    widthFactor: value,
+                    child: ColoredBox(
+                      color: color,
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 5),
         Text(
           importance.toStringAsFixed(2),
           style: TextStyle(
             fontSize: 11,
-            color: color,
             fontWeight: FontWeight.w600,
+            color: color,
             fontFeatures: const [FontFeature.tabularFigures()],
           ),
         ),
@@ -1789,18 +1910,20 @@ class _HighlightedText extends StatelessWidget {
   final String text;
   final String keyword;
   final TextStyle baseStyle;
+  final int? maxLines;
 
   const _HighlightedText({
     required this.text,
     required this.keyword,
     required this.baseStyle,
+    this.maxLines,
   });
 
   @override
   Widget build(BuildContext context) {
     final kw = keyword.trim();
     if (kw.isEmpty) {
-      return Text(text, style: baseStyle);
+      return Text(text, style: baseStyle, maxLines: maxLines);
     }
     final lowerText = text.toLowerCase();
     final lowerKw = kw.toLowerCase();
@@ -1834,6 +1957,8 @@ class _HighlightedText extends StatelessWidget {
 
     return RichText(
       text: TextSpan(children: spans, style: baseStyle),
+      maxLines: maxLines,
+      overflow: maxLines != null ? TextOverflow.ellipsis : TextOverflow.clip,
     );
   }
 }

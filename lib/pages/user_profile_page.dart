@@ -21,6 +21,7 @@ class UserProfilePage extends StatefulWidget {
 
 class _UserProfilePageState extends State<UserProfilePage> {
   late final TextEditingController _name;
+  late final TextEditingController _description;
   late String _avatarPath;
 
   @override
@@ -28,12 +29,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
     super.initState();
     final p = context.read<AppState>().userProfile;
     _name = TextEditingController(text: p.name);
+    _description = TextEditingController(text: p.description);
     _avatarPath = p.avatarPath;
   }
 
   @override
   void dispose() {
     _name.dispose();
+    _description.dispose();
     super.dispose();
   }
 
@@ -51,8 +54,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
     await avatarsDir.create(recursive: true);
     final dot = img.path.lastIndexOf('.');
     final ext = dot >= 0 ? img.path.substring(dot) : '.jpg';
-    final saved =
-        await File(img.path).copy('${avatarsDir.path}/${_uuid.v4()}$ext');
+    final saved = await File(
+      img.path,
+    ).copy('${avatarsDir.path}/${_uuid.v4()}$ext');
     if (!mounted) return;
     setState(() => _avatarPath = saved.path);
   }
@@ -61,6 +65,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final profile = UserProfile(
       name: _name.text.trim().isEmpty ? '我' : _name.text.trim(),
       avatarPath: _avatarPath,
+      description: _description.text.trim(),
     );
     context.read<AppState>().updateUserProfile(profile);
     Navigator.pop(context);
@@ -69,16 +74,12 @@ class _UserProfilePageState extends State<UserProfilePage> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final hasAvatar =
-        _avatarPath.isNotEmpty && File(_avatarPath).existsSync();
+    final hasAvatar = _avatarPath.isNotEmpty && File(_avatarPath).existsSync();
     return Scaffold(
       appBar: AppBar(
         title: const Text('我的资料'),
         actions: [
-          FilledButton.tonal(
-            onPressed: _save,
-            child: const Text('保存'),
-          ),
+          FilledButton.tonal(onPressed: _save, child: const Text('保存')),
           const SizedBox(width: 16),
         ],
       ),
@@ -99,8 +100,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
                       : CircleAvatar(
                           radius: 56,
                           backgroundColor: cs.primaryContainer,
-                          child: Icon(Icons.person,
-                              size: 56, color: cs.onPrimaryContainer),
+                          child: Icon(
+                            Icons.person,
+                            size: 56,
+                            color: cs.onPrimaryContainer,
+                          ),
                         ),
                   Positioned(
                     right: 0,
@@ -113,8 +117,11 @@ class _UserProfilePageState extends State<UserProfilePage> {
                         onTap: _pickAvatar,
                         child: Padding(
                           padding: const EdgeInsets.all(6),
-                          child: Icon(Icons.photo_camera_outlined,
-                              size: 16, color: cs.onPrimary),
+                          child: Icon(
+                            Icons.photo_camera_outlined,
+                            size: 16,
+                            color: cs.onPrimary,
+                          ),
                         ),
                       ),
                     ),
@@ -127,10 +134,9 @@ class _UserProfilePageState extends State<UserProfilePage> {
           Center(
             child: Text(
               '点击头像从相册选择图片',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
           ),
           const SizedBox(height: 24),
@@ -143,6 +149,18 @@ class _UserProfilePageState extends State<UserProfilePage> {
               prefixIcon: Icon(Icons.person_outline),
             ),
             textInputAction: TextInputAction.done,
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _description,
+            maxLines: 5,
+            minLines: 3,
+            decoration: const InputDecoration(
+              labelText: '我的设定（可选）',
+              hintText: '告诉角色你是谁：身份、性格、与角色的关系……会在聊天时注入给对方，让 TA 更懂你。留空则不注入。',
+              border: OutlineInputBorder(),
+              alignLabelWithHint: true,
+            ),
           ),
           const SizedBox(height: 32),
         ],
